@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const db = require('./db');
 const crypto = require('./crypto-utils');
+const handshake = require('./handshake');
 
 // ── Init ─────────────────────────────────────────────
 db.init();
@@ -223,6 +224,82 @@ app.get('/api/version/:projectId', (req, res) => {
         checkpoint_steps: steps.length,
         checkpoint_cooldown_hours: project.checkpoint_cooldown_hours || 24
     });
+});
+
+// ══════════════════════════════════════════════════════
+//  HANDSHAKE ROUTES — In-game challenge-response (nonce2/auth7)
+//  Bodies are plain-text numbers: the Lua client does Body+0.
+//  Error bodies are NON-numeric so the client's pcall path warns.
+// ══════════════════════════════════════════════════════
+
+// GET /api/nonce2?rngSeed=<fp>&key=<key> — Issue challenge nonce
+app.get('/api/nonce2', (req, res) => {
+    const { rngSeed, key } = req.query;
+    const ip = getIP(req);
+    const ua = req.headers['user-agent'] || '';
+
+    const seed = Math.floor(Number(rngSeed));
+    if (!key || !Number.isFinite(seed) || seed < 0) {
+        return res.status(400).type('text/plain').send('BAD_REQUEST');
+    }
+
+    const keyRecord = db.getKeyByValue(key);
+    if (!keyRecord) {
+        db.logAuth(null, null, null, ip, 'HANDSHAKE_INVALID_KEY', ua);
+        return res.status(403).type('text/plain').send('INVALID_KEY');
+    }
+    const project = db.getProject(keyRecord.project_id);
+    if (!project) {
+        return res.status(403).type('text/plain').send('PROJECT_NOT_FOUND');
+    }
+    if (project.kill_switch) {
+        db.logAuth(keyRecord.id, project.id, null, ip, 'HANDSHAKE_KILLED', ua);
+        return res.status(403).type('text/plain').send('PROJECT_KILLED');
+    }
+    if (!keyRecord.is_active) {
+        db.logAuth(keyRecord.id, project.id, null, ip, 'HANDSHAKE_DISABLED', ua);
+        return res.status(403).type('text/plain').send('KEY_DISABLED');
+    }
+    if (keyRecord.is_blacklisted) {
+        db.logAuth(keyRecord.id, project.id, null, ip, 'HANDSHAKE_BLACKLISTED', ua);
+        return res.status(403).type('text/plain').send('KEY_BLACKLISTED');
+    }
+    if (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date()) {
+        db.logAuth(keyRecord.id, project.id, null, ip, 'HANDSHAKE_EXPIRED', ua);
+        return res.status(403).type('text/plain').send('KEY_EXPIRED');
+    }
+    if (!keyRecord.checkpoint_cleared && db.isCheckpointRequired(project)) {
+        db.logAuth(keyRecord.id, project.id, null, ip, 'HANDSHAKE_CHECKPOINT', ua);
+        return res.status(403).type('text/plain').send('CHECKPOINT_REQUIRED');
+    }
+
+    const nonce = handshake.mintNonce(seed, keyRecord, ip);
+    res.type('text/plain').send(String(nonce));
+});
+
+// GET /api/auth7?response=<expectedNonce> — Verify challenge answer
+app.get('/api/auth7', (req, res) => {
+    const { response } = req.query;
+    const ip = getIP(req);
+    const ua = req.headers['user-agent'] || '';
+
+    const hit = handshake.verifyResponse(response, ip);
+    if (!hit) {
+        db.logAuth(null, null, null, ip, 'HANDSHAKE_MISMATCH', ua);
+        return res.status(403).type('text/plain').send('MISMATCH');
+    }
+
+    // ── Verified: treat like a successful auth ──
+    const keyRecord = db.getKeyByValue(hit.challenge.keyValue);
+    if (keyRecord) {
+        db.updateKey(keyRecord.id, {
+            use_count: keyRecord.use_count + 1,
+            last_ip: ip,
+            last_used: new Date().toISOString()
+        });
+        db.logAuth(keyRecord.id, keyRecord.project_id, null, ip, 'SUCCESS', ua + ' [handshake]');
+    }
+    res.type('text/plain').send(String(hit.reply));
 });
 
 // ══════════════════════════════════════════════════════
