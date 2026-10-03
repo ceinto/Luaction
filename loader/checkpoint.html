@@ -141,7 +141,10 @@
             return res.json();
         }
 
+        let starting = false;
         async function start() {
+            if (starting) return;
+            starting = true;
             $('start-btn').disabled = true;
             setStatus('Starting…');
             try {
@@ -156,18 +159,28 @@
                 if (!res.ok) throw new Error(data.message || data.error);
                 sessionId = data.session_id;
                 totalSteps = data.total_steps;
-                verifiedSteps = 0;
+                verifiedSteps = data.verified_steps || 0;
                 nextLink = data.link_url;
                 if (keyVal) existingKey = keyVal;
+                try { localStorage.setItem(`af_cp_session_${projectId}`, sessionId); } catch {}
                 history.replaceState(null, '', `?project=${projectId}&session=${sessionId}${existingKey ? `&key=${encodeURIComponent(existingKey)}` : ''}`);
                 $('key-entry').style.display = 'none';
                 $('start-btn').style.display = 'none';
                 renderBar();
-                openStep();
-                poll();
+                if (data.resumed && verifiedSteps > 0) {
+                    // Picked up a live session — don't reopen step 1, just resume polling.
+                    setStatus(`Resumed at step ${verifiedSteps + 1} — waiting for completion…`);
+                    poll();
+                } else {
+                    if (data.resumed) setStatus('Resumed your live session…');
+                    openStep();
+                    poll();
+                }
             } catch (err) {
                 setStatus(err.message, 'error');
                 $('start-btn').disabled = false;
+            } finally {
+                starting = false;
             }
         }
 
@@ -199,6 +212,7 @@
                     nextLink = null;
                     renderBar();
                     clearInterval(pollTimer);
+                    try { localStorage.removeItem(`af_cp_session_${data.project_id || projectId}`); } catch {}
                     await finish();
                     return;
                 }
@@ -286,6 +300,37 @@
                 setStatus('Open this page from the link your developer shared (?project=…).', 'error');
                 $('start-btn').style.display = 'none';
                 return;
+            }
+            // Resume a live session from this browser (same tab reloaded,
+            // or Start pressed before) instead of minting a duplicate.
+            if (!sessionId) {
+                try {
+                    const stored = localStorage.getItem(`af_cp_session_${projectId}`);
+                    if (stored) {
+                        const r = await fetch(`${API_URL}/checkpoint/resume`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ project_id: projectId, hwid: getHWID() })
+                        });
+                        if (r.ok) {
+                            const d = await r.json();
+                            if (d.session_id === stored || d.session_id) {
+                                sessionId = d.session_id;
+                                totalSteps = d.total_steps;
+                                verifiedSteps = d.verified_steps || 0;
+                                nextLink = d.link_url;
+                                history.replaceState(null, '', `?project=${projectId}&session=${sessionId}${existingKey ? `&key=${encodeURIComponent(existingKey)}` : ''}`);
+                                $('key-entry').style.display = 'none';
+                                $('start-btn').style.display = 'none';
+                                renderBar();
+                                setStatus(`Resumed at step ${verifiedSteps + 1} — waiting for completion…`);
+                                poll();
+                                return;
+                            }
+                        }
+                        try { localStorage.removeItem(`af_cp_session_${projectId}`); } catch {}
+                    }
+                } catch { /* fall through to fresh start UI */ }
             }
             try {
                 const cfg = await fetchConfig();

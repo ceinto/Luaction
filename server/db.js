@@ -327,6 +327,45 @@ function getCheckpointSession(id) {
     return db.prepare('SELECT * FROM checkpoint_sessions WHERE id = ?').get(id);
 }
 
+// Latest still-incomplete session for this project+hwid (30 min window).
+// /checkpoint/start resumes this instead of minting duplicates, so the
+// static Linkvertise callback can only ever credit one live session.
+function findPendingSession(projectId, hwid) {
+    if (!hwid) return null;
+    return db.prepare(`
+        SELECT * FROM checkpoint_sessions
+        WHERE project_id = ? AND hwid = ?
+          AND checkpoint_token IS NULL
+          AND datetime(created_at) > datetime('now', '-30 minutes')
+        ORDER BY datetime(created_at) DESC LIMIT 1
+    `).get(projectId, hwid);
+}
+
+// Refresh key/IP on a resumed session (user may add their key on 2nd Start).
+function touchCheckpointSession(id, { key_value, ip }) {
+    const s = getCheckpointSession(id);
+    if (!s) return s;
+    db.prepare(`
+        UPDATE checkpoint_sessions
+        SET key_value = COALESCE(?, key_value),
+            last_ip = COALESCE(?, last_ip)
+        WHERE id = ?
+    `).run(key_value || null, ip || null, id);
+    return getCheckpointSession(id);
+}
+
+// Recent verification attempts for admin debugging (newest first).
+function getCheckpointAttempts(projectId, limit = 50) {
+    return db.prepare(`
+        SELECT v.*, s.hwid AS session_hwid, s.verified_steps
+        FROM checkpoint_verifications v
+        LEFT JOIN checkpoint_sessions s ON s.id = v.session_id
+        WHERE v.project_id = ?
+        ORDER BY v.created_at DESC
+        LIMIT ?
+    `).all(projectId, limit);
+}
+
 function getSessionByToken(token) {
     if (!token) return null;
     return db.prepare('SELECT * FROM checkpoint_sessions WHERE checkpoint_token = ?').get(token);
@@ -447,6 +486,7 @@ module.exports = {
     logAuth, getAuthLogs,
     getProjectStats,
     parseSteps, isCheckpointRequired, createCheckpointSession, getCheckpointSession,
+    findPendingSession, touchCheckpointSession, getCheckpointAttempts,
     getSessionByToken, getValidCheckpoint, markStepVerified, logCheckpointAttempt,
     claimCheckpointByIP
 };

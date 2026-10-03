@@ -425,6 +425,13 @@ async function showCheckpointModal(projectId) {
                 <p class="text-[11px] text-gray-600 mb-2">Give this script to users — they run it in their executor. No browser needed in-game.</p>
                 <button onclick="copyLoaderStub('${p.id}')" class="px-3 py-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-200 text-[11px] font-medium rounded-lg transition-all">⧉ Copy loader script</button>
             </div>
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="text-[11px] text-gray-400 font-medium">Recent verification attempts</label>
+                    <button onclick="loadCpAttempts('${p.id}')" class="text-[11px] text-violet-300 hover:text-violet-200">↻ Refresh</button>
+                </div>
+                <div id="cp-attempts" class="text-[11px] text-gray-600">Loading attempts…</div>
+            </div>
         </div>
         <div class="flex justify-end gap-2 mt-5">
             <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
@@ -432,6 +439,7 @@ async function showCheckpointModal(projectId) {
         </div>
     `);
     loadCpTargets(projectId);
+    loadCpAttempts(projectId);
 }
 
 async function loadCpTargets(projectId) {
@@ -459,6 +467,33 @@ async function copyLoaderStub(projectId) {
         await navigator.clipboard.writeText(data.script);
         toast('Loader script copied — share it with users', 'success');
     } catch (err) { toast(err.message, 'error'); }
+}
+
+async function loadCpAttempts(projectId) {
+    const el = document.getElementById('cp-attempts');
+    try {
+        const attempts = await api(`/checkpoint/attempts/${projectId}?limit=20`);
+        if (!el) return;
+        if (!attempts.length) {
+            el.innerHTML = '<p class="text-gray-600">No attempts yet — completions and failures appear here.</p>';
+            return;
+        }
+        el.innerHTML = attempts.map(a => {
+            const ok = a.status === 'VERIFIED';
+            const when = a.created_at ? new Date(a.created_at).toLocaleString() : '';
+            const hash = a.hash ? esc(String(a.hash).substring(0, 12)) + '…' : '—';
+            const sess = a.session_id ? esc(String(a.session_id).substring(0, 8)) + '…' : 'no session';
+            return `<div class="flex items-center justify-between py-1 border-b border-white/5">
+                <span class="font-mono text-gray-400">step ${(a.step ?? 0) + 1} · ${hash} · ${sess}</span>
+                <span class="flex items-center gap-2">
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium ${ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}">${esc(a.status)}</span>
+                    <span class="text-gray-600">${when}</span>
+                </span>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        if (el) el.textContent = 'Could not load attempts.';
+    }
 }
 
 function addCpStep() {

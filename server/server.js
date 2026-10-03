@@ -412,6 +412,14 @@ app.get('/api/checkpoint/targets/:projectId', requireAdmin, (req, res) => {
     });
 });
 
+// GET /api/checkpoint/attempts/:projectId — Admin: recent verification attempts
+app.get('/api/checkpoint/attempts/:projectId', requireAdmin, (req, res) => {
+    const project = db.getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    res.json(db.getCheckpointAttempts(req.params.projectId, limit));
+});
+
 // GET /api/loader-stub/:projectId — Admin: in-game Lua loader with project values prefilled
 app.get('/api/loader-stub/:projectId', requireAdmin, (req, res) => {
     const project = db.getProject(req.params.projectId);
@@ -431,7 +439,9 @@ app.get('/api/loader-stub/:projectId', requireAdmin, (req, res) => {
 });
 
 // POST /api/checkpoint/start — Begin (or resume) a checkpoint session
-// Body: { project_id, hwid, key? } → { session_id, total_steps, current_step, link_url, callback_url }
+// Body: { project_id, hwid, key? } → { session_id, resumed, ... }
+// A second Start for the same browser resumes the live session instead
+// of minting a duplicate the Linkvertise callback could never credit.
 app.post('/api/checkpoint/start', (req, res) => {
     const { project_id, hwid, key } = req.body || {};
     if (!project_id || !hwid) {
@@ -444,16 +454,61 @@ app.post('/api/checkpoint/start', (req, res) => {
         return res.status(400).json({ error: 'CHECKPOINT_DISABLED', message: 'Checkpoint is not enabled for this project' });
     }
 
+    const existing = db.findPendingSession(project_id, hwid);
+    if (existing && existing.verified_steps < steps.length) {
+        const session = db.touchCheckpointSession(existing.id, { key_value: key || null, ip: getIP(req) });
+        const step = Math.min(session.verified_steps, Math.max(steps.length - 1, 0));
+        return res.json({
+            session_id: session.id,
+            resumed: true,
+            total_steps: steps.length,
+            current_step: step,
+            verified_steps: session.verified_steps,
+            link_url: steps[step],
+            callback_url: callbackUrlFor(req, session.id, step),
+            target_urls: steps.map((_, i) => `${getBaseUrl(req)}/api/checkpoint/callback?project=${project_id}&step=${i}`),
+            cooldown_hours: project.checkpoint_cooldown_hours || 24
+        });
+    }
+
     const session = db.createCheckpointSession(project_id, { hwid, key_value: key || null, ip: getIP(req) });
     const step = 0;
     res.json({
         session_id: session.id,
+        resumed: false,
         total_steps: steps.length,
         current_step: step,
+        verified_steps: 0,
         link_url: steps[step],
         callback_url: callbackUrlFor(req, session.id, step),
         // Static per-step Target URLs (paste these into Linkvertise → Target URL)
         target_urls: steps.map((_, i) => `${getBaseUrl(req)}/api/checkpoint/callback?project=${project_id}&step=${i}`),
+        cooldown_hours: project.checkpoint_cooldown_hours || 24
+    });
+});
+// POST /api/checkpoint/resume — Pick up the live session for this browser
+// Body: { project_id, hwid } → same shape as /start (resumed: true), or 404.
+app.post('/api/checkpoint/resume', (req, res) => {
+    const { project_id, hwid } = req.body || {};
+    if (!project_id || !hwid) {
+        return res.status(400).json({ error: 'MISSING_FIELDS', message: 'project_id and hwid are required' });
+    }
+    const project = db.getProject(project_id);
+    if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+    const steps = db.parseSteps(project);
+    const pending = db.findPendingSession(project_id, hwid);
+    if (!pending || pending.verified_steps >= steps.length) {
+        return res.status(404).json({ error: 'NO_PENDING_SESSION' });
+    }
+    const step = Math.min(pending.verified_steps, Math.max(steps.length - 1, 0));
+    res.json({
+        session_id: pending.id,
+        resumed: true,
+        total_steps: steps.length,
+        current_step: step,
+        verified_steps: pending.verified_steps,
+        link_url: steps[step],
+        callback_url: callbackUrlFor(req, pending.id, step),
         cooldown_hours: project.checkpoint_cooldown_hours || 24
     });
 });
