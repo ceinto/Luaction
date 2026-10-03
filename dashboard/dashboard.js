@@ -153,6 +153,8 @@ async function renderProjects() {
             const isKilled = !!p.kill_switch;
             const cpSteps = parseCpSteps(p);
             const cpOn = !!p.checkpoint_enabled && cpSteps.length > 0;
+            const scriptBytes = (p.script_data || '').length;
+            const hasScript = scriptBytes > 0;
             html += `
             <div class="glass rounded-2xl p-5 fade-up cursor-pointer hover:border-white/10 transition-all duration-200 group" onclick="selectProject('${p.id}')" style="animation-delay: ${i * 60}ms">
                 <div class="flex items-start justify-between mb-4">
@@ -167,6 +169,9 @@ async function renderProjects() {
                     </div>
                     <div class="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${cpOn ? 'bg-violet-500/10 text-violet-300' : 'bg-white/5 text-gray-500'}">
                         ☑ ${cpOn ? cpSteps.length + ' step' + (cpSteps.length > 1 ? 's' : '') : 'No checkpoint'}
+                    </div>
+                    <div class="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${hasScript ? 'bg-emerald-500/10 text-emerald-300' : 'bg-white/5 text-gray-500'}">
+                        &lt;/&gt; ${hasScript ? 'v' + esc(p.version) + ' · ' + fmtBytes(scriptBytes) : 'No script'}
                     </div>
                     </div>
                 </div>
@@ -187,6 +192,9 @@ async function renderProjects() {
                 <div class="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
                     <span class="text-[10px] text-gray-500">v${esc(p.version)}</span>
                     <div class="flex items-center gap-2">
+                        <button onclick="event.stopPropagation(); showScriptModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${hasScript ? 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'bg-white/5 text-gray-400 hover:bg-emerald-500/10 hover:text-emerald-300'} transition-all" title="Upload protected script">
+                            &lt;/&gt; Script
+                        </button>
                         <button onclick="event.stopPropagation(); showCheckpointModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${cpOn ? 'bg-violet-500/10 text-violet-300 hover:bg-violet-500/20' : 'bg-white/5 text-gray-400 hover:bg-violet-500/10 hover:text-violet-300'} transition-all" title="Linkvertise checkpoint steps">
                             ☑ Checkpoint
                         </button>
@@ -225,6 +233,114 @@ async function deleteProject(id) {
         await api(`/projects/${id}`, { method: 'DELETE' });
         toast('Project deleted', 'success');
         renderProjects();
+    } catch (err) { toast(err.message, 'error'); }
+}
+
+// ── Script Upload ────────────────────────────────────
+
+const MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
+
+function fmtBytes(n) {
+    if (!n) return '0 B';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+async function showScriptModal(projectId) {
+    let p;
+    try { p = await api(`/projects/${projectId}`); }
+    catch (err) { toast(err.message, 'error'); return; }
+
+    const current = p.script_data || '';
+    const lines = current.split('\n');
+    const preview = esc(lines.slice(0, 30).join('\n')) + (lines.length > 30 ? `\n… (${lines.length - 30} more lines)` : '');
+
+    showModal(`
+        <h3 class="text-base font-semibold text-white mb-1">&lt;/&gt; Protected Script — ${esc(p.name)}</h3>
+        <p class="text-[11px] text-gray-500 mb-4">Upload the .lua file developers run. It is stored raw and wrapped with fresh security code on every delivery.</p>
+        <div class="bg-white/[0.03] border border-white/5 rounded-lg px-3 py-2 mb-3 text-[11px] text-gray-400">
+            ${current
+                ? `Current: <span class="text-gray-200 font-medium">v${esc(p.version)}</span> · <span class="font-mono">${esc(p.version_hash || '—')}</span> · ${fmtBytes(current.length)}`
+                : '<span class="text-gray-500">No script uploaded yet.</span>'}
+        </div>
+        ${current ? `<pre class="bg-black/30 border border-white/5 rounded-lg p-3 text-[10px] font-mono text-gray-500 overflow-auto max-h-32 mb-3 whitespace-pre-wrap">${preview}</pre>` : ''}
+        <div id="script-drop" class="border border-dashed border-white/10 hover:border-emerald-500/40 rounded-xl p-5 text-center cursor-pointer transition-colors mb-3">
+            <p class="text-xs text-gray-300 font-medium">Drop .lua file here or click to browse</p>
+            <p class="text-[10px] text-gray-600 mt-1">.lua · .luau · .txt — max 2 MB</p>
+            <input id="script-file" type="file" accept=".lua,.luau,.txt" class="hidden">
+        </div>
+        <label class="text-[11px] text-gray-400 font-medium mb-1 block">Script source (paste or uploaded)</label>
+        <textarea id="script-text" rows="8" spellcheck="false" placeholder="-- paste Lua source here…" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] font-mono text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 transition-colors resize-y"></textarea>
+        <div class="flex items-center gap-3 mt-3">
+            <div class="flex-1">
+                <label class="text-[11px] text-gray-400 font-medium mb-1 block">Version</label>
+                <input id="script-version" type="text" value="${esc(p.version || '1.0.0')}" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition-colors font-mono">
+            </div>
+            <div class="text-[11px] text-gray-500 pt-5">Size: <span id="script-size" class="font-mono text-gray-300">0 B</span></div>
+        </div>
+        <div class="flex justify-between items-center mt-5">
+            ${current ? `<button onclick="clearScript('${p.id}')" class="px-3 py-2 text-[11px] text-red-400/70 hover:text-red-400 transition-colors">Remove script</button>` : '<span></span>'}
+            <div class="flex gap-2">
+                <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
+                <button onclick="saveScript('${p.id}')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-all">Upload script</button>
+            </div>
+        </div>
+    `);
+
+    const drop = document.getElementById('script-drop');
+    const fileInput = document.getElementById('script-file');
+    const text = document.getElementById('script-text');
+    const sizeEl = document.getElementById('script-size');
+    const updateSize = () => { sizeEl.textContent = fmtBytes(new Blob([text.value]).size); };
+    text.addEventListener('input', updateSize);
+    drop.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => { if (fileInput.files[0]) readScriptFile(fileInput.files[0]); });
+    ['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('border-emerald-500/40'); }));
+    ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('border-emerald-500/40'); }));
+    drop.addEventListener('drop', (e) => {
+        const f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) readScriptFile(f);
+    });
+
+    function readScriptFile(f) {
+        if (f.size > MAX_SCRIPT_BYTES) { toast(`File too large (${fmtBytes(f.size)} > 2 MB)`, 'error'); return; }
+        const reader = new FileReader();
+        reader.onload = () => {
+            document.getElementById('script-text').value = String(reader.result || '');
+            updateSize();
+            toast(`Loaded ${f.name}`, 'info');
+        };
+        reader.onerror = () => toast('Could not read file', 'error');
+        reader.readAsText(f);
+    }
+    // expose for inline use
+    window._readScriptFile = readScriptFile;
+}
+
+async function saveScript(projectId) {
+    const text = document.getElementById('script-text').value;
+    const version = document.getElementById('script-version').value.trim() || '1.0.0';
+    if (!text.trim()) { toast('Script is empty — paste source or upload a file', 'error'); return; }
+    if (new Blob([text]).size > MAX_SCRIPT_BYTES) { toast('Script exceeds 2 MB', 'error'); return; }
+    try {
+        const updated = await api(`/projects/${projectId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ script_data: text, version })
+        });
+        hideModal();
+        toast(`Script uploaded · v${updated.version} · ${updated.version_hash}`, 'success');
+        renderPage();
+    } catch (err) { toast(err.message, 'error'); }
+}
+
+async function clearScript(projectId) {
+    if (!confirm('Remove the uploaded script? Clients will receive NO_SCRIPT until you upload again.')) return;
+    try {
+        await api(`/projects/${projectId}`, { method: 'PATCH', body: JSON.stringify({ script_data: '' }) });
+        hideModal();
+        toast('Script removed', 'info');
+        renderPage();
     } catch (err) { toast(err.message, 'error'); }
 }
 
@@ -416,6 +532,9 @@ async function renderKeys() {
                 <p class="text-xs text-gray-500">${data.total} total keys · ${cpOn ? `☑ Checkpoint ON (${cpSteps.length} step${cpSteps.length > 1 ? 's' : ''})` : 'Checkpoint off'}</p>
             </div>
             <div class="flex gap-2">
+                <button onclick="showScriptModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-300 text-gray-300 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                    &lt;/&gt; Script
+                </button>
                 <button onclick="showCheckpointModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-violet-500/10 hover:text-violet-300 text-gray-300 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
                     ☑ Checkpoint
                 </button>

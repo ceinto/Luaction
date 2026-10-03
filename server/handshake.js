@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const MOD = 900000000000;
 const BUCKET = 15;              // must match client Bucket
 const NONCE_TTL_MS = 90 * 1000; // covers bucket rollover + latency
+const TICKET_TTL_MS = 60 * 1000; // completed-handshake redemption window
 
 function mod(v) {
     return ((v % MOD) + MOD) % MOD;
@@ -102,14 +103,57 @@ function verifyResponse(response, ip) {
     return null;
 }
 
+// ── Completed handshakes awaiting script fetch ─────────
+// reply → { keyId, keyValue, projectId, ip, expiresAt }.
+// Single-use: consumed by POST /api/fetch. The reply doubles
+// as the payload keystream seed (never transported separately).
+const completed = new Map();
+
+function completeChallenge(reply, challenge) {
+    sweepCompleted();
+    completed.set(String(reply), {
+        keyId: challenge.keyId,
+        keyValue: challenge.keyValue,
+        projectId: challenge.projectId,
+        ip: challenge.ip,
+        expiresAt: Date.now() + TICKET_TTL_MS
+    });
+    if (completed.size > 5000) {
+        const oldest = [...completed.keys()].slice(0, completed.size - 5000);
+        for (const k of oldest) completed.delete(k);
+    }
+}
+
+function sweepCompleted() {
+    const now = Date.now();
+    for (const [reply, c] of completed) {
+        if (c.expiresAt <= now) completed.delete(reply);
+    }
+}
+
+// Returns the record and consumes it, or null.
+function consumeCompleted(reply, keyValue) {
+    sweepCompleted();
+    const rec = completed.get(String(reply));
+    if (!rec) return null;
+    if (rec.expiresAt <= Date.now()) { completed.delete(String(reply)); return null; }
+    if (rec.keyValue !== keyValue) return null;
+    completed.delete(String(reply));
+    return rec;
+}
+
 module.exports = {
     MOD,
     BUCKET,
     NONCE_TTL_MS,
+    TICKET_TTL_MS,
     getExpected,
     currentBucket,
     mintNonce,
     verifyResponse,
+    completeChallenge,
+    consumeCompleted,
     // exposed for tests
-    _pending: pending
+    _pending: pending,
+    _completed: completed
 };

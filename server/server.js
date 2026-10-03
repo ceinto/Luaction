@@ -6,6 +6,7 @@ const path = require('path');
 const db = require('./db');
 const crypto = require('./crypto-utils');
 const handshake = require('./handshake');
+const wrap = require('./wrap');
 
 // ── Init ─────────────────────────────────────────────
 db.init();
@@ -299,7 +300,87 @@ app.get('/api/auth7', (req, res) => {
         });
         db.logAuth(keyRecord.id, keyRecord.project_id, null, ip, 'SUCCESS', ua + ' [handshake]');
     }
+    // Record completion so POST /api/fetch can redeem the wrapped script.
+    // Body stays purely numeric — the Lua client does Body+0.
+    handshake.completeChallenge(hit.reply, hit.challenge);
     res.type('text/plain').send(String(hit.reply));
+});
+
+// POST /api/fetch — Redeem a completed handshake for the wrapped script
+// Body: { key, hwid, reply } — reply is single-use, 60s window.
+app.post('/api/fetch', (req, res) => {
+    const { key, hwid, reply } = req.body || {};
+    const ip = getIP(req);
+    const ua = req.headers['user-agent'] || '';
+
+    if (!key || !hwid || reply === undefined) {
+        return res.status(400).json({ error: 'MISSING_FIELDS', message: 'key, hwid and reply are required' });
+    }
+
+    const keyRecord = db.getKeyByValue(key);
+    if (!keyRecord) {
+        return res.status(403).json({ error: 'INVALID_KEY', message: 'License key not found' });
+    }
+    const project = db.getProject(keyRecord.project_id);
+    if (!project) {
+        return res.status(403).json({ error: 'PROJECT_NOT_FOUND', message: 'Project does not exist' });
+    }
+    if (project.kill_switch) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'PROJECT_KILLED', ua);
+        return res.status(403).json({ error: 'PROJECT_KILLED', message: 'This project has been disabled by the developer' });
+    }
+    if (!keyRecord.is_active) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'KEY_DISABLED', ua);
+        return res.status(403).json({ error: 'KEY_DISABLED', message: 'This key has been disabled' });
+    }
+    if (keyRecord.is_blacklisted) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'KEY_BLACKLISTED', ua);
+        return res.status(403).json({ error: 'KEY_BLACKLISTED', message: 'This key has been blacklisted' });
+    }
+    if (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date()) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'KEY_EXPIRED', ua);
+        return res.status(403).json({ error: 'KEY_EXPIRED', message: 'This key has expired' });
+    }
+    if (!keyRecord.checkpoint_cleared && db.isCheckpointRequired(project)) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'CHECKPOINT_REQUIRED', ua);
+        return res.status(403).json({ error: 'CHECKPOINT_REQUIRED', message: 'Complete the checkpoint steps to continue' });
+    }
+
+    // Single-use redemption of the completed handshake
+    const ticket = handshake.consumeCompleted(reply, key);
+    if (!ticket) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'FETCH_DENIED', ua);
+        return res.status(403).json({ error: 'INVALID_TICKET', message: 'Handshake reply invalid, expired, or already redeemed' });
+    }
+
+    if (!project.script_data) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'NO_SCRIPT', ua);
+        return res.status(404).json({ error: 'NO_SCRIPT', message: 'No script uploaded for this project' });
+    }
+
+    // ── Build a fresh polymorphic wrapper (unique every delivery) ──
+    let chunk;
+    try {
+        chunk = wrap.buildChunk({
+            userScript: project.script_data,
+            apiBase: `${getBaseUrl(req)}/api`,
+            key, hwid,
+            reply: Math.floor(Number(reply)),
+            versionHash: project.version_hash || ''
+        });
+    } catch (e) {
+        db.logAuth(keyRecord.id, project.id, hwid, ip, 'WRAP_FAILED', ua);
+        return res.status(500).json({ error: 'WRAP_FAILED', message: 'Could not protect script' });
+    }
+
+    db.updateKey(keyRecord.id, {
+        use_count: keyRecord.use_count + 1,
+        last_ip: ip,
+        last_used: new Date().toISOString()
+    });
+    db.logAuth(keyRecord.id, project.id, hwid, ip, 'SUCCESS', ua + ' [fetch]');
+
+    res.type('text/plain').send(chunk);
 });
 
 // ══════════════════════════════════════════════════════
@@ -579,9 +660,12 @@ app.patch('/api/projects/:id', requireAdmin, (req, res) => {
         updates.checkpoint_cooldown_hours = n;
     }
 
-    // Auto-hash script content when updated
-    if (updates.script_data) {
-        updates.version_hash = crypto.hashScript(updates.script_data);
+    // Auto-hash script content when updated (2 MB cap, '' clears)
+    if (updates.script_data !== undefined) {
+        if (typeof updates.script_data === 'string' && Buffer.byteLength(updates.script_data, 'utf8') > 2 * 1024 * 1024) {
+            return res.status(413).json({ error: 'SCRIPT_TOO_LARGE', message: 'Script exceeds 2 MB' });
+        }
+        updates.version_hash = updates.script_data ? crypto.hashScript(updates.script_data) : '';
     }
 
     const updated = db.updateProject(req.params.id, updates);

@@ -30,6 +30,8 @@ local function copyText(s)
 end
 
 local function authRequest(key)
+    -- Legacy path (C++ loader uses POST /api/auth with AES envelope).
+    -- In-game flow uses the handshake below; kept for reference only.
     local res = request({
         Url = API_URL .. "/auth",
         Method = "POST",
@@ -44,6 +46,51 @@ local function authRequest(key)
         return game:GetService("HttpService"):JSONDecode(res.Body)
     end)
     return res.StatusCode, ok and data or {}
+end
+
+local function httpGet(url)
+    local ok, res = pcall(request, { Url = url, Method = "GET" })
+    if not ok or not res then return nil end
+    if (res.StatusCode or res.Status_code or 0) ~= 200 then return nil, res.Body end
+    return res.Body
+end
+
+local function httpPost(url, tbl)
+    local ok, res = pcall(request, {
+        Url = url,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = game:GetService("HttpService"):JSONEncode(tbl),
+    })
+    if not ok or not res then return nil end
+    if (res.StatusCode or res.Status_code or 0) ~= 200 then return nil, res.Body end
+    return res.Body
+end
+
+-- Challenge math — must match server/handshake.js exactly.
+local function GetExpected(rngSeed, nonce, timeBucket)
+    local MOD = 900000000000
+    local x = rngSeed % MOD
+    local n = nonce % MOD
+    local t = timeBucket % MOD
+    x = (x * 191 + n * 163 + t * 97 + 59) % MOD
+    local digits = x
+    while digits > 0 do
+        local digit = digits % 10
+        for _ = 1, 4 do
+            if digit % 2 == 0 then x = (x * 73 + n * 29 + t * 11 + digit + 11) % MOD
+            else x = (x * 97 + n * 17 + t * 7 + digit + 37) % MOD end
+            if (x + t) % 3 == 0 then x = (x + n * 113 + t * 17) % MOD
+            elseif (x + t) % 3 == 1 then x = (x * 31 + n * 17 + t * 19 + 73) % MOD
+            else x = (x * 43 + n * 29 + t * 13 + 131) % MOD end
+            if digit % 5 == 0 then x = (x * 41 + t * 23 + digit + 12345) % MOD
+            else x = (x * 53 + n * 19 + t * 31 + digit + 6789) % MOD end
+            if (x + t) % 7 < 3 then x = (x * 19 + n * 23 + t * 29 + 123) % MOD
+            else x = (x * 37 + n * 13 + t * 41 + 4567) % MOD end
+        end
+        digits = math.floor(digits / 10)
+    end
+    return math.floor(x)
 end
 
 -- ── GUI (pure Roblox instances, no UI library) ───────
@@ -169,35 +216,51 @@ getKeyBtn.MouseButton1Click:Connect(function()
     revealKeySite("")
 end)
 
--- ── What happens after a successful auth ─────────────
--- data = { status="OK", nonce=..., payload={iv,tag,data}, version=... }
--- The payload is AES-256-GCM encrypted for your HWID. Decrypt it with
--- your own loader, or replace this with loadstring(game:HttpGet(...)).
-local function onAuthSuccess(data)
-    setStatus("Authenticated ✓", Color3.fromRGB(16, 185, 129))
-    task.wait(0.6)
-    gui:Destroy()
-    -- TODO: handle data.payload here (decrypt + execute your script)
-    print("[Luaction] auth OK, version " .. tostring(data.version))
+-- ── Authenticate → fetch wrapped script → run ──────
+-- Server verifies every step; only it can mint a valid reply,
+-- and every delivery carries a fresh polymorphic wrapper.
+local function handleKeyError(body)
+    local err = tostring(body or "FAILED")
+    if err == "CHECKPOINT_REQUIRED" or err == "KEY_EXPIRED" or err == "MAX_USES_REACHED" then
+        revealKeySite(err == "KEY_EXPIRED" and "Key expired (24h). " or "")
+    elseif err == "INVALID_KEY" then
+        setStatus("Invalid license key.", Color3.fromRGB(239, 68, 68))
+    elseif err == "KEY_BLACKLISTED" or err == "KEY_DISABLED" or err == "PROJECT_KILLED" then
+        setStatus("Key rejected by server.", Color3.fromRGB(239, 68, 68))
+    else
+        setStatus("Error: " .. err, Color3.fromRGB(239, 68, 68))
+    end
 end
 
 submitBtn.MouseButton1Click:Connect(function()
     local key = keyBox.Text:gsub("%s+", "")
     if key == "" then setStatus("Enter your key first.") return end
+    local hwid = getHWID()
+
     setStatus("Verifying…")
-    local code, data = authRequest(key)
-    if code == 200 and data.status == "OK" then
-        onAuthSuccess(data)
-        return
-    end
-    local err = tostring(data.error or "FAILED")
-    if err == "CHECKPOINT_REQUIRED" or err == "KEY_EXPIRED" or err == "MAX_USES_REACHED" then
-        revealKeySite(err == "KEY_EXPIRED" and "Key expired (24h). " or "")
-    elseif err == "INVALID_KEY" then
-        setStatus("Invalid license key.", Color3.fromRGB(239, 68, 68))
-    elseif err == "HWID_MISMATCH" then
-        setStatus("Key locked to another device.", Color3.fromRGB(239, 68, 68))
-    else
-        setStatus(data.message or ("Error: " .. err), Color3.fromRGB(239, 68, 68))
+    local seed = math.floor(math.random() * 899999999999) + 1
+    local nonceBody, nonceErr = httpGet(API_URL .. "/nonce2?rngSeed=" .. seed .. "&key=" .. key)
+    local nonce = tonumber(nonceBody or "")
+    if not nonce then handleKeyError(nonceBody or nonceErr) return end
+
+    local bucket = math.floor(os.time() / 15)
+    local expected = GetExpected(seed, nonce, bucket)
+    local replyBody = httpGet(API_URL .. "/auth7?response=" .. expected)
+    local reply = tonumber(replyBody or "")
+    if not reply then setStatus("Auth mismatch.", Color3.fromRGB(239, 68, 68)) return end
+
+    setStatus("Downloading…")
+    local chunk, fetchErr = httpPost(API_URL .. "/fetch", { key = key, hwid = hwid, reply = reply })
+    if not chunk or #chunk < 64 then handleKeyError(fetchErr) return end
+
+    setStatus("Loading…")
+    local fn, lerr = loadstring(chunk)
+    if not fn then setStatus("Corrupt payload.", Color3.fromRGB(239, 68, 68)) return end
+
+    frame.Visible = false
+    local ok, rerr = pcall(fn, reply, key, hwid, API_URL)
+    if not ok then
+        frame.Visible = true
+        setStatus("Script error.", Color3.fromRGB(239, 68, 68))
     end
 end)
