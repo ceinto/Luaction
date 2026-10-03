@@ -236,7 +236,7 @@
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.message || data.error);
                     existingKey = data.key;
-                    showKey(data.key);
+                    showKey(data.key, data.expires_at);
                 } catch (err) {
                     setStatus(err.message, 'error');
                 }
@@ -251,7 +251,7 @@
             }
         }
 
-        function showKey(key) {
+        function showKey(key, expiresAt) {
             const box = $('key-box');
             box.style.display = '';
             box.textContent = key;
@@ -261,7 +261,8 @@
             btn.onclick = () => {
                 window.location.href = `loader.html?key=${encodeURIComponent(key)}&cp=${encodeURIComponent(checkpointToken || '')}`;
             };
-            setStatus('Key claimed — copy it or continue to login.', 'ok');
+            const exp = expiresAt ? ` Valid until ${new Date(expiresAt).toLocaleString()} — paste it in-game.` : '';
+            setStatus(`Key claimed — copy it and paste it in-game.${exp}`, 'ok');
         }
 
         async function init() {

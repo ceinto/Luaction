@@ -136,18 +136,27 @@ app.post('/api/auth', (req, res) => {
         return res.status(403).json({ error: 'MAX_USES_REACHED', message: 'This key has reached its maximum usage limit' });
     }
 
-    // HWID binding logic
-    if (!keyRecord.hwid) {
-        // First use: bind HWID
-        db.updateKey(keyRecord.id, { hwid: hwid });
-    } else if (keyRecord.hwid !== hwid) {
-        // HWID mismatch
-        db.logAuth(keyRecord.id, project.id, hwid, ip, 'HWID_MISMATCH', ua);
-        return res.status(403).json({ error: 'HWID_MISMATCH', message: 'This key is locked to a different device' });
+    // Cleared keys (minted via website checkpoint) work from any HWID —
+    // the key itself proves checkpoint completion. In-game clients paste the
+    // key from a different device than the claiming browser, so both the
+    // HWID lock and the per-auth token gate are skipped for them.
+    // Expiry / active / blacklist checks above still apply.
+    const cleared = !!keyRecord.checkpoint_cleared;
+
+    // HWID binding logic (skipped for checkpoint-cleared keys)
+    if (!cleared) {
+        if (!keyRecord.hwid) {
+            // First use: bind HWID
+            db.updateKey(keyRecord.id, { hwid: hwid });
+        } else if (keyRecord.hwid !== hwid) {
+            // HWID mismatch
+            db.logAuth(keyRecord.id, project.id, hwid, ip, 'HWID_MISMATCH', ua);
+            return res.status(403).json({ error: 'HWID_MISMATCH', message: 'This key is locked to a different device' });
+        }
     }
 
-    // ── Checkpoint gate (Linkvertise) ──
-    if (db.isCheckpointRequired(project)) {
+    // ── Checkpoint gate (Linkvertise) — skipped for cleared keys ──
+    if (!cleared && db.isCheckpointRequired(project)) {
         const valid = db.getValidCheckpoint(project.id, { hwid, key_value: key, checkpoint_token });
         if (!valid) {
             db.logAuth(keyRecord.id, project.id, hwid, ip, 'CHECKPOINT_REQUIRED', ua);
@@ -159,7 +168,8 @@ app.post('/api/auth', (req, res) => {
                     required: true,
                     project_id: project.id,
                     total_steps: steps.length,
-                    cooldown_hours: project.checkpoint_cooldown_hours || 24
+                    cooldown_hours: project.checkpoint_cooldown_hours || 24,
+                    key_site_url: `${getBaseUrl(req)}/loader/checkpoint.html?project=${project.id}`
                 }
             });
         }
@@ -242,6 +252,24 @@ app.get('/api/checkpoint/targets/:projectId', requireAdmin, (req, res) => {
     res.json({
         targets: steps.map((_, i) => `${base}/api/checkpoint/callback?project=${project.id}&step=${i}`)
     });
+});
+
+// GET /api/loader-stub/:projectId — Admin: in-game Lua loader with project values prefilled
+app.get('/api/loader-stub/:projectId', requireAdmin, (req, res) => {
+    const project = db.getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+    const fs = require('fs');
+    try {
+        const base = getBaseUrl(req);
+        const apiBase = `${base}/api`;
+        const keySite = `${base}/loader/checkpoint.html?project=${project.id}`;
+        let script = fs.readFileSync(path.join(__dirname, '..', 'loader', 'lua_stub.lua'), 'utf8');
+        script = script.split('__PROJECT_ID__').join(project.id);
+        script = script.split('__API_URL__').join(apiBase);
+        res.json({ project_id: project.id, key_site_url: keySite, script });
+    } catch (e) {
+        res.status(500).json({ error: 'STUB_MISSING', message: 'loader/lua_stub.lua not found on server' });
+    }
 });
 
 // POST /api/checkpoint/start — Begin (or resume) a checkpoint session
@@ -399,12 +427,18 @@ app.post('/api/keys/claim', (req, res) => {
         db.logAuth(null, project_id, hwid, ip, 'CHECKPOINT_FAILED', ua);
         return res.status(403).json({ error: 'CHECKPOINT_INVALID', message: 'Checkpoint token invalid or expired. Complete the steps again.' });
     }
-    // One key per HWID: return existing unbound/bound key instead of minting duplicates
-    const existing = db.listKeys(project_id, 500, 0).find(k => k.hwid === hwid);
-    if (existing) return res.json({ key: existing.key_value, reused: true, checkpoint_token });
-    const created = db.createKey(project_id, { hwid, note: 'checkpoint-claim' });
+    // One key per browser HWID: return the still-valid claimed key instead of minting duplicates
+    const existing = db.listKeys(project_id, 500, 0).find(k =>
+        k.hwid === hwid && k.checkpoint_cleared &&
+        (!k.expires_at || new Date(k.expires_at) > new Date())
+    );
+    if (existing) return res.json({ key: existing.key_value, reused: true, expires_at: existing.expires_at, checkpoint_token });
+    // Claimed keys: checkpoint-cleared (work in-game from any HWID), 24h default expiry.
+    // hwid stores the claiming browser for reuse lookup only — never enforced on cleared keys.
+    const expiresAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const created = db.createKey(project_id, { hwid, note: 'checkpoint-claim', expires_at: expiresAt, checkpoint_cleared: 1 });
     db.logAuth(created.id, project_id, hwid, ip, 'SUCCESS', ua + ' [checkpoint-claim]');
-    res.status(201).json({ key: created.key_value, reused: false, checkpoint_token });
+    res.status(201).json({ key: created.key_value, reused: false, expires_at: expiresAt, checkpoint_token });
 });
 
 

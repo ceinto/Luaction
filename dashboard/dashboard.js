@@ -304,6 +304,11 @@ async function showCheckpointModal(projectId) {
                     <button onclick="copyText('${checkpointPageUrl(p.id)}')" class="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-300 text-[11px] rounded-lg transition-all shrink-0">Copy</button>
                 </div>
             </div>
+            <div>
+                <label class="text-[11px] text-gray-400 font-medium mb-1 block">In-game loader script (native GUI, Get Key shows the site URL)</label>
+                <p class="text-[11px] text-gray-600 mb-2">Give this script to users — they run it in their executor. No browser needed in-game.</p>
+                <button onclick="copyLoaderStub('${p.id}')" class="px-3 py-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-200 text-[11px] font-medium rounded-lg transition-all">⧉ Copy loader script</button>
+            </div>
         </div>
         <div class="flex justify-end gap-2 mt-5">
             <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
@@ -329,6 +334,14 @@ async function copyCpTargets(projectId) {
         const data = await api(`/checkpoint/targets/${projectId}`);
         await navigator.clipboard.writeText(data.targets.join('\n'));
         toast('Target URLs copied', 'info');
+    } catch (err) { toast(err.message, 'error'); }
+}
+
+async function copyLoaderStub(projectId) {
+    try {
+        const data = await api(`/loader-stub/${projectId}`);
+        await navigator.clipboard.writeText(data.script);
+        toast('Loader script copied — share it with users', 'success');
     } catch (err) { toast(err.message, 'error'); }
 }
 
@@ -435,6 +448,7 @@ async function renderKeys() {
             keys.forEach(k => {
                 const statusClass = k.is_blacklisted ? 'bg-red-500/10 text-red-400' : k.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-yellow-500/10 text-yellow-400';
                 const statusText = k.is_blacklisted ? 'Blacklisted' : k.is_active ? 'Active' : 'Disabled';
+                const cpBadge = k.checkpoint_cleared ? ' <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-500/10 text-violet-300" title="Claimed via website checkpoint">☑</span>' : '';
                 const hwidShort = k.hwid ? k.hwid.substring(0, 12) + '...' : '—';
                 const expiresAt = k.expires_at ? new Date(k.expires_at).toLocaleDateString() : 'Lifetime';
                 const lastUsed = k.last_used ? timeAgo(k.last_used) : 'Never';
@@ -443,7 +457,7 @@ async function renderKeys() {
                     <tr class="table-row border-b border-white/[0.03]">
                         <td class="px-4 py-3 font-mono text-gray-300 cursor-pointer hover:text-blue-400 transition-colors" onclick="copyText('${esc(k.key_value)}')" title="Click to copy">${esc(k.key_value)}</td>
                         <td class="px-4 py-3 font-mono text-gray-500">${hwidShort}</td>
-                        <td class="px-4 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-medium ${statusClass}">${statusText}</span></td>
+                        <td class="px-4 py-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-medium ${statusClass}">${statusText}</span>${cpBadge}</td>
                         <td class="px-4 py-3 text-gray-400">${k.use_count}${k.max_uses > 0 ? '/' + k.max_uses : ''}</td>
                         <td class="px-4 py-3 text-gray-500">${expiresAt}</td>
                         <td class="px-4 py-3 text-gray-500">${lastUsed}</td>

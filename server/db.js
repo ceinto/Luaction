@@ -44,6 +44,7 @@ function init() {
             use_count      INTEGER DEFAULT 0,
             last_ip        TEXT DEFAULT NULL,
             last_used      DATETIME DEFAULT NULL,
+            checkpoint_cleared INTEGER DEFAULT 0,
             created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -103,6 +104,8 @@ function init() {
         addCol('checkpoint_cooldown_hours', 'INTEGER DEFAULT 24');
         const cpCols = db.prepare(`PRAGMA table_info(checkpoint_sessions)`).all().map(c => c.name);
         if (!cpCols.includes('last_ip')) db.exec(`ALTER TABLE checkpoint_sessions ADD COLUMN last_ip TEXT DEFAULT NULL`);
+        const keyCols = db.prepare(`PRAGMA table_info(keys)`).all().map(c => c.name);
+        if (!keyCols.includes('checkpoint_cleared')) db.exec(`ALTER TABLE keys ADD COLUMN checkpoint_cleared INTEGER DEFAULT 0`);
     } catch { /* fresh DB already has columns */ }
 
     return db;
@@ -168,8 +171,8 @@ function createKey(projectId, opts = {}) {
     const keyValue = opts.key_value || generateLicenseKey();
 
     const stmt = db.prepare(`
-        INSERT INTO keys (id, project_id, key_value, hwid, discord_id, note, expires_at, max_uses)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO keys (id, project_id, key_value, hwid, discord_id, note, expires_at, max_uses, checkpoint_cleared)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
         id, projectId, keyValue,
@@ -177,7 +180,8 @@ function createKey(projectId, opts = {}) {
         opts.discord_id || null,
         opts.note || '',
         opts.expires_at || null,
-        opts.max_uses || 0
+        opts.max_uses || 0,
+        opts.checkpoint_cleared ? 1 : 0
     );
     return getKey(id);
 }
@@ -219,7 +223,7 @@ function countKeys(projectId) {
 }
 
 function updateKey(id, fields) {
-    const allowed = ['hwid', 'discord_id', 'note', 'is_active', 'is_blacklisted', 'expires_at', 'max_uses', 'use_count', 'last_ip', 'last_used'];
+    const allowed = ['hwid', 'discord_id', 'note', 'is_active', 'is_blacklisted', 'expires_at', 'max_uses', 'use_count', 'last_ip', 'last_used', 'checkpoint_cleared'];
     const updates = [];
     const values = [];
 
