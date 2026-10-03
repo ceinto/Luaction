@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AntiFold Shield — Dashboard</title>
+    <meta name="description" content="Manage your script protection, license keys, and analytics.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+                    colors: {
+                        charcoal: { 900: '#1a1b1f', 950: '#111215' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * { font-family: 'Inter', system-ui, sans-serif; }
+        body { background: #111215; }
+        .glass { background: rgba(26, 27, 31, 0.6); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.06); }
+        .glass-strong { background: rgba(26, 27, 31, 0.85); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.08); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+        @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+        .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+        @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+        .fade-up { animation: fadeUp 0.4s ease-out both; }
+        @keyframes slideIn { from { transform:translateX(100%); opacity:0; } to { transform:translateX(0); opacity:1; } }
+        @keyframes slideOut { from { transform:translateX(0); opacity:1; } to { transform:translateX(100%); opacity:0; } }
+        .toast-in { animation: slideIn 0.3s ease-out; }
+        .toast-out { animation: slideOut 0.3s ease-in forwards; }
+        .table-row { transition: background 0.15s ease; }
+        .table-row:hover { background: rgba(255,255,255,0.03); }
+        .modal-overlay { background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+        .sidebar-link { transition: all 0.2s ease; position: relative; }
+        .sidebar-link::before { content:''; position:absolute; left:0; top:50%; transform:translateY(-50%); width:3px; height:0; background:#3B82F6; border-radius:0 2px 2px 0; transition:height 0.2s ease; }
+        .sidebar-link.active::before { height:60%; }
+        .sidebar-link.active { background: rgba(59,130,246,0.08); color: #60A5FA; }
+        .ambient-bg { position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 20% 0%, rgba(59,130,246,0.04) 0%, transparent 50%), radial-gradient(ellipse at 80% 100%, rgba(139,92,246,0.03) 0%, transparent 50%); }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen overflow-hidden">
+    <div class="ambient-bg"></div>
+    <div class="flex h-screen relative z-10">
+        <!-- Sidebar -->
+        <aside class="w-64 glass-strong flex flex-col border-r border-white/5 shrink-0">
+            <div class="px-6 py-5 border-b border-white/5">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                    </div>
+                    <div>
+                        <h1 class="text-sm font-semibold text-white tracking-tight">AntiFold Shield</h1>
+                        <p class="text-[10px] text-gray-500 font-medium tracking-wider uppercase">Control Panel</p>
+                    </div>
+                </div>
+            </div>
+            <nav class="flex-1 px-3 py-4 space-y-1">
+                <a href="#" class="sidebar-link active flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium" data-page="projects" id="nav-projects">
+                    <svg class="w-4 h-4 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                    Projects
+                </a>
+                <a href="#" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-white/5" data-page="keys" id="nav-keys">
+                    <svg class="w-4 h-4 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                    License Keys
+                </a>
+                <a href="#" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-white/5" data-page="logs" id="nav-logs">
+                    <svg class="w-4 h-4 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+                    Auth Logs
+                </a>
+            </nav>
+            <div class="px-4 py-3 border-t border-white/5">
+                <div class="flex items-center gap-2 text-xs text-gray-500">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+                    <span id="server-status">Connecting...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main -->
+        <main class="flex-1 overflow-y-auto">
+            <header class="sticky top-0 z-20 glass-strong border-b border-white/5 px-8 py-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white" id="page-title">Projects</h2>
+                        <p class="text-xs text-gray-500 mt-0.5" id="page-subtitle">Manage your protected scripts</p>
+                    </div>
+                    <button onclick="showCreateModal()" id="btn-create-main" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-all duration-200 hover:shadow-lg hover:shadow-blue-500/20 flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Create
+                    </button>
+                </div>
+            </header>
+            <div class="p-8" id="content-area"></div>
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+    <!-- Modal -->
+    <div id="modal-overlay" class="fixed inset-0 z-40 modal-overlay hidden items-center justify-center">
+        <div id="modal-content" class="glass rounded-2xl border border-white/10 w-full max-w-lg mx-4 p-6 fade-up"></div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>

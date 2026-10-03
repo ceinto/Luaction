@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authenticate</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0e0f12;
+            background-image:
+                radial-gradient(ellipse at 30% 20%, rgba(59, 130, 246, 0.04) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 80%, rgba(139, 92, 246, 0.03) 0%, transparent 50%);
+            overflow: hidden;
+        }
+
+        /* Floating particles */
+        .particle {
+            position: fixed;
+            width: 1px;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0) translateX(0); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateY(-100vh) translateX(30px); opacity: 0; }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 380px;
+            padding: 0 20px;
+        }
+
+        /* Glass card */
+        .card {
+            background: rgba(22, 23, 28, 0.65);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            padding: 40px 32px;
+            transition: border-color 0.6s ease, box-shadow 0.6s ease;
+        }
+        .card.state-processing {
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 0 40px rgba(59, 130, 246, 0.08), 0 0 80px rgba(59, 130, 246, 0.04);
+        }
+        .card.state-success {
+            border-color: rgba(16, 185, 129, 0.3);
+            box-shadow: 0 0 40px rgba(16, 185, 129, 0.08), 0 0 80px rgba(16, 185, 129, 0.04);
+        }
+        .card.state-error {
+            border-color: rgba(239, 68, 68, 0.3);
+            box-shadow: 0 0 40px rgba(239, 68, 68, 0.06);
+        }
+
+        /* Shield icon */
+        .shield-icon {
+            width: 36px;
+            height: 36px;
+            margin: 0 auto 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.12));
+            border-radius: 10px;
+            opacity: 0.7;
+            transition: opacity 0.3s ease;
+        }
+        .shield-icon svg {
+            width: 18px;
+            height: 18px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* Input wrapper */
+        .input-wrapper {
+            position: relative;
+        }
+
+        .license-input {
+            width: 100%;
+            padding: 14px 46px 14px 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            color: #e2e4e9;
+            font-family: 'Inter', monospace;
+            font-size: 13px;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+            outline: none;
+            transition: border-color 0.4s ease, background 0.4s ease, box-shadow 0.4s ease;
+        }
+        .license-input::placeholder {
+            color: rgba(255, 255, 255, 0.15);
+            font-family: 'Inter', sans-serif;
+            letter-spacing: 0;
+        }
+        .license-input:focus {
+            border-color: rgba(59, 130, 246, 0.4);
+            background: rgba(255, 255, 255, 0.04);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.06);
+        }
+        .license-input.processing {
+            border-color: rgba(59, 130, 246, 0.5);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+        }
+        .license-input.success {
+            border-color: rgba(16, 185, 129, 0.5);
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.08);
+        }
+        .license-input.error {
+            border-color: rgba(239, 68, 68, 0.4);
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.06);
+        }
+
+        /* Submit button (arrow) */
+        .submit-btn {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 34px;
+            height: 34px;
+            border: none;
+            background: rgba(59, 130, 246, 0.12);
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .submit-btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+        .submit-btn svg {
+            width: 16px;
+            height: 16px;
+            color: rgba(59, 130, 246, 0.8);
+            transition: color 0.3s ease;
+        }
+        .submit-btn:hover svg { color: #3B82F6; }
+        .submit-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.4;
+        }
+
+        /* Spinner */
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(59, 130, 246, 0.2);
+            border-top-color: #3B82F6;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            display: none;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Status message */
+        .status-msg {
+            text-align: center;
+            font-size: 11px;
+            font-weight: 400;
+            margin-top: 16px;
+            min-height: 16px;
+            opacity: 0;
+            transform: translateY(4px);
+            transition: opacity 0.4s ease, transform 0.4s ease, color 0.4s ease;
+            color: rgba(255, 255, 255, 0.3);
+        }
+        .status-msg.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .status-msg.processing { color: rgba(59, 130, 246, 0.7); }
+        .status-msg.success { color: rgba(16, 185, 129, 0.7); }
+        .status-msg.error { color: rgba(239, 68, 68, 0.6); }
+
+        /* Checkmark animation */
+        @keyframes checkDraw {
+            to { stroke-dashoffset: 0; }
+        }
+        .check-icon {
+            display: none;
+            width: 16px;
+            height: 16px;
+        }
+        .check-icon path {
+            stroke-dasharray: 20;
+            stroke-dashoffset: 20;
+            animation: checkDraw 0.4s ease forwards 0.1s;
+        }
+
+        /* Fade in on load */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(16px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .card { animation: fadeIn 0.6s ease-out; }
+    </style>
+</head>
+<body>
+    <!-- Particles -->
+    <script>
+        for (let i = 0; i < 20; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.left = Math.random() * 100 + '%';
+            p.style.top = Math.random() * 100 + '%';
+            p.style.width = p.style.height = (Math.random() * 2 + 0.5) + 'px';
+            p.style.animation = `float ${Math.random() * 15 + 10}s linear ${Math.random() * 10}s infinite`;
+            document.body.appendChild(p);
+        }
+    </script>
+
+    <div class="container">
+        <div class="card" id="card">
+            <!-- Subtle shield icon -->
+            <div class="shield-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                </svg>
+            </div>
+
+            <!-- Single input -->
+            <form id="auth-form" autocomplete="off">
+                <div class="input-wrapper">
+                    <input
+                        type="text"
+                        id="key-input"
+                        class="license-input"
+                        placeholder="Enter your license key"
+                        spellcheck="false"
+                        autocomplete="off"
+                        maxlength="23"
+                    >
+                    <button type="submit" class="submit-btn" id="submit-btn">
+                        <svg id="arrow-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                        </svg>
+                        <div class="spinner" id="spinner"></div>
+                        <svg class="check-icon" id="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" style="stroke: #10B981;"/>
+                        </svg>
+                    </button>
+                </div>
+            </form>
+
+            <p class="status-msg" id="status-msg"></p>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000/api';
+        const form = document.getElementById('auth-form');
+        const input = document.getElementById('key-input');
+        const card = document.getElementById('card');
+        const btn = document.getElementById('submit-btn');
+        const arrow = document.getElementById('arrow-icon');
+        const spinner = document.getElementById('spinner');
+        const checkIcon = document.getElementById('check-icon');
+        const statusMsg = document.getElementById('status-msg');
+
+        function setStatus(text, state) {
+            statusMsg.textContent = text;
+            statusMsg.className = `status-msg visible ${state}`;
+        }
+
+        function clearStatus() {
+            statusMsg.className = 'status-msg';
+        }
+
+        function setState(state) {
+            // Reset
+            input.classList.remove('processing', 'success', 'error');
+            card.classList.remove('state-processing', 'state-success', 'state-error');
+            arrow.style.display = '';
+            spinner.style.display = 'none';
+            checkIcon.style.display = 'none';
+            btn.disabled = false;
+
+            if (state === 'processing') {
+                input.classList.add('processing');
+                card.classList.add('state-processing');
+                arrow.style.display = 'none';
+                spinner.style.display = 'block';
+                btn.disabled = true;
+                input.readOnly = true;
+                setStatus('Verifying...', 'processing');
+            } else if (state === 'success') {
+                input.classList.add('success');
+                card.classList.add('state-success');
+                arrow.style.display = 'none';
+                checkIcon.style.display = 'block';
+                // Re-trigger animation
+                checkIcon.querySelector('path').style.animation = 'none';
+                void checkIcon.querySelector('path').offsetWidth;
+                checkIcon.querySelector('path').style.animation = '';
+                btn.disabled = true;
+                input.readOnly = true;
+                setStatus('Authenticated', 'success');
+            } else if (state === 'error') {
+                input.classList.add('error');
+                card.classList.add('state-error');
+                input.readOnly = false;
+                setTimeout(() => {
+                    input.classList.remove('error');
+                    card.classList.remove('state-error');
+                    clearStatus();
+                }, 3000);
+            } else {
+                input.readOnly = false;
+                clearStatus();
+            }
+        }
+
+        // Generate a fake HWID for demo (in production, C++ loader handles this)
+        function getHWID() {
+            let hwid = localStorage.getItem('af_hwid');
+            if (!hwid) {
+                const arr = new Uint8Array(32);
+                crypto.getRandomValues(arr);
+                hwid = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+                localStorage.setItem('af_hwid', hwid);
+            }
+            return hwid;
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const key = input.value.trim();
+            if (!key) {
+                input.focus();
+                return;
+            }
+
+            setState('processing');
+
+            try {
+                const res = await fetch(`${API_URL}/auth`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        key: key,
+                        hwid: getHWID(),
+                        version: '1.0.0'
+                    })
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    setState('error');
+                    const messages = {
+                        'INVALID_KEY': 'Invalid license key',
+                        'HWID_MISMATCH': 'Locked to another device',
+                        'KEY_EXPIRED': 'License has expired',
+                        'KEY_BLACKLISTED': 'Key has been revoked',
+                        'KEY_DISABLED': 'Key is disabled',
+                        'PROJECT_KILLED': 'Service unavailable',
+                        'MAX_USES_REACHED': 'Usage limit reached'
+                    };
+                    setStatus(messages[data.error] || data.message || 'Authentication failed', 'error');
+                    return;
+                }
+
+                setState('success');
+                // Script payload is in data.payload (encrypted)
+                // In production, C++ loader would decrypt and execute
+                console.log('[AntiFold] Auth success, payload received:', data);
+
+            } catch (err) {
+                setState('error');
+                setStatus('Connection failed', 'error');
+            }
+        });
+
+        // Auto-format key input: AF-XXXX-XXXX-XXXX-XXXX
+        input.addEventListener('input', () => {
+            let v = input.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+            input.value = v;
+        });
+
+        input.focus();
+    </script>
+</body>
+</html>
