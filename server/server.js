@@ -181,20 +181,20 @@ app.post('/api/projects', (req, res) => {
 });
 
 // GET /api/projects — List all projects
-app.get('/api/projects', (req, res) => {
+app.get('/api/projects', requireAdmin, (req, res) => {
     const projects = db.listProjects();
     res.json(projects);
 });
 
 // GET /api/projects/:id — Get single project
-app.get('/api/projects/:id', (req, res) => {
+app.get('/api/projects/:id', requireAdmin, (req, res) => {
     const project = db.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'NOT_FOUND' });
     res.json(project);
 });
 
 // PATCH /api/projects/:id — Update project (kill switch, script, version)
-app.patch('/api/projects/:id', (req, res) => {
+app.patch('/api/projects/:id', requireAdmin, (req, res) => {
     const project = db.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'NOT_FOUND' });
 
@@ -217,7 +217,7 @@ app.patch('/api/projects/:id', (req, res) => {
 });
 
 // DELETE /api/projects/:id — Delete project + all keys
-app.delete('/api/projects/:id', (req, res) => {
+app.delete('/api/projects/:id', requireAdmin, (req, res) => {
     db.deleteProject(req.params.id);
     res.json({ status: 'deleted' });
 });
@@ -225,7 +225,7 @@ app.delete('/api/projects/:id', (req, res) => {
 // ── Keys ─────────────────────────────────────────────
 
 // POST /api/keys/:projectId — Create key(s)
-app.post('/api/keys/:projectId', (req, res) => {
+app.post('/api/keys/:projectId', requireAdmin, (req, res) => {
     const project = db.getProject(req.params.projectId);
     if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
@@ -244,7 +244,7 @@ app.post('/api/keys/:projectId', (req, res) => {
 });
 
 // GET /api/keys/:projectId — List keys
-app.get('/api/keys/:projectId', (req, res) => {
+app.get('/api/keys/:projectId', requireAdmin, (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
     const offset = parseInt(req.query.offset) || 0;
     const keys = db.listKeys(req.params.projectId, limit, offset);
@@ -253,7 +253,7 @@ app.get('/api/keys/:projectId', (req, res) => {
 });
 
 // PATCH /api/keys/update/:keyId — Update key
-app.patch('/api/keys/update/:keyId', (req, res) => {
+app.patch('/api/keys/update/:keyId', requireAdmin, (req, res) => {
     const key = db.getKey(req.params.keyId);
     if (!key) return res.status(404).json({ error: 'KEY_NOT_FOUND' });
 
@@ -262,7 +262,7 @@ app.patch('/api/keys/update/:keyId', (req, res) => {
 });
 
 // POST /api/keys/reset-hwid/:keyId — Reset HWID
-app.post('/api/keys/reset-hwid/:keyId', (req, res) => {
+app.post('/api/keys/reset-hwid/:keyId', requireAdmin, (req, res) => {
     const key = db.getKey(req.params.keyId);
     if (!key) return res.status(404).json({ error: 'KEY_NOT_FOUND' });
 
@@ -271,7 +271,7 @@ app.post('/api/keys/reset-hwid/:keyId', (req, res) => {
 });
 
 // DELETE /api/keys/:keyId — Delete key
-app.delete('/api/keys/:keyId', (req, res) => {
+app.delete('/api/keys/:keyId', requireAdmin, (req, res) => {
     db.deleteKey(req.params.keyId);
     res.json({ status: 'deleted' });
 });
@@ -279,14 +279,14 @@ app.delete('/api/keys/:keyId', (req, res) => {
 // ── Logs & Stats ─────────────────────────────────────
 
 // GET /api/logs/:projectId — Get auth logs
-app.get('/api/logs/:projectId', (req, res) => {
+app.get('/api/logs/:projectId', requireAdmin, (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const logs = db.getAuthLogs(req.params.projectId, limit);
     res.json(logs);
 });
 
 // GET /api/stats/:projectId — Get project stats
-app.get('/api/stats/:projectId', (req, res) => {
+app.get('/api/stats/:projectId', requireAdmin, (req, res) => {
     const project = db.getProject(req.params.projectId);
     if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
@@ -308,4 +308,5 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
