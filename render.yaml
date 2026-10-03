@@ -3,7 +3,7 @@ services:
     name: luaction-api
     runtime: node
     rootDir: server
-    buildCommand: npm install
+    buildCommand: npm ci && npm rebuild better-sqlite3
     startCommand: npm start
     envVars:
       - key: NODE_ENV
