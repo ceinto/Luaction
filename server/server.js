@@ -13,6 +13,10 @@ db.init();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Behind Render (and any reverse proxy) Express must trust the proxy,
+// otherwise express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+app.set('trust proxy', 1);
+
 // ── Middleware ────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
@@ -569,8 +573,9 @@ app.get('/api/checkpoint/status', (req, res) => {
 app.get('/api/checkpoint/callback', async (req, res) => {
     const { session, project, project_id, step, hash } = req.query;
     const loaderPage = (s, extra = '') => `${getBaseUrl(req)}/loader/checkpoint.html?session=${encodeURIComponent(s)}${extra}`;
-    const failPage = (msg) => res.status(400).send(
-        `<body style="background:#111215;color:#e5e7eb;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh"><div style="text-align:center"><h3>Checkpoint verification failed</h3><p style="color:#6b7280">${msg}</p><p style="color:#6b7280">Return to the previous tab — your progress is saved automatically.</p></div></body>`);
+    const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const failPage = (msg, detail) => res.status(400).send(
+        `<body style="background:#111215;color:#e5e7eb;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh"><div style="text-align:center"><h3>Checkpoint verification failed</h3><p style="color:#6b7280">${msg}</p>${detail ? `<p style="color:#4b5563;font-size:12px;font-family:monospace">Ref: ${escHtml(detail)}</p>` : ''}<p style="color:#6b7280">Return to the previous tab — your progress is saved automatically.</p></div></body>`);
 
     const stepIdx = Math.max(0, parseInt(step ?? 0) || 0);
     const pid = project || project_id;
