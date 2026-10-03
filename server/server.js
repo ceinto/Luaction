@@ -3,7 +3,16 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const db = require('./db');
+let db;
+try {
+    db = require('./db');
+} catch (e) {
+    console.error('\nFATAL: the native database module (better-sqlite3) failed to load.');
+    console.error('This means it was compiled for a different Node.js version than the one running.');
+    console.error(`Running: ${process.version} (modules v${process.versions.modules})`);
+    console.error('Fix: clean reinstall plus `npm rebuild better-sqlite3` on this exact Node version.\n');
+    throw e;
+}
 const crypto = require('./crypto-utils');
 const handshake = require('./handshake');
 const wrap = require('./wrap');
