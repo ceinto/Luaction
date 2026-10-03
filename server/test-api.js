@@ -24,7 +24,7 @@ function req(method, path, body) {
 }
 
 async function run() {
-    console.log('\n=== AntiFold Shield API Test ===\n');
+    console.log('\n=== Luaction API Test ===\n');
 
     // 1. Health check
     let r = await req('GET', '/health');
@@ -38,7 +38,7 @@ async function run() {
 
     // 3. Upload script to project
     r = await req('PATCH', `/projects/${projectId}`, {
-        script_data: 'print("Hello from AntiFold Shield!")\nlocal x = 42\nprint("Protected value:", x)',
+        script_data: 'print("Hello from Luaction!")\nlocal x = 42\nprint("Protected value:", x)',
         version: '1.0.0'
     });
     console.log('3. Upload script:', r.status === 200 ? 'PASS' : 'FAIL', '- Hash:', r.data.version_hash);
@@ -117,3 +117,4 @@ async function run() {
 }
 
 run().catch(err => { console.error('Test error:', err); process.exit(1); });
+

@@ -302,9 +302,10 @@ app.get('/api/health', (req, res) => {
 // ── Start ────────────────────────────────────────────
 app.listen(PORT, () => {
     console.log(`\n  ┌──────────────────────────────────────┐`);
-    console.log(`  │  AntiFold Shield API — v1.0.0        │`);
+    console.log(`  │  Luaction API — v1.0.0        │`);
     console.log(`  │  Running on http://localhost:${PORT}    │`);
     console.log(`  └──────────────────────────────────────┘\n`);
 });
 
 module.exports = app;
+

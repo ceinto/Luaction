@@ -1,5 +1,5 @@
 /*
- * AntiFold Shield — Native Client Loader
+ * Luaction — Native Client Loader
  * HWID collection, server auth, AES-256-GCM decryption
  * Zero external dependencies: WinHTTP + CNG only
  */
@@ -305,7 +305,7 @@ int af_http_request(const wchar_t* method, const wchar_t* path,
     *out_response = NULL;
     *out_response_len = 0;
 
-    session = WinHttpOpen(L"AntiFold/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    session = WinHttpOpen(L"Luaction/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) goto cleanup;
 
@@ -561,7 +561,7 @@ void af_free_payload(AF_DecryptedPayload* payload) {
 int main(int argc, char* argv[]) {
     printf("\n");
     printf("  ╔══════════════════════════════════════╗\n");
-    printf("  ║  AntiFold Shield Loader  v%s      ║\n", AF_VERSION);
+    printf("  ║  Luaction Loader  v%s      ║\n", AF_VERSION);
     printf("  ╚══════════════════════════════════════╝\n\n");
 
     // Get license key from arg or prompt
@@ -624,3 +624,4 @@ int main(int argc, char* argv[]) {
     getchar();
     return 0;
 }
+

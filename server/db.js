@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const { randomHex, generateLicenseKey, hashScript } = require('./crypto-utils');
 
-const DB_PATH = path.join(__dirname, 'antifold.db');
+const DB_PATH = path.join(__dirname, 'luaction.db');
 let db;
 
 function init() {
@@ -254,3 +254,4 @@ module.exports = {
     logAuth, getAuthLogs,
     getProjectStats
 };
+

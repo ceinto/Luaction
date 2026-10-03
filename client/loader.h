@@ -1,6 +1,6 @@
 #pragma once
-#ifndef ANTIFOLD_LOADER_H
-#define ANTIFOLD_LOADER_H
+#ifndef luaction_loader_H
+#define luaction_loader_H
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -99,4 +99,5 @@ int  af_json_get_int(const char* json, const char* key, int* out);
 void af_free_response(AF_AuthResponse* resp);
 void af_free_payload(AF_DecryptedPayload* payload);
 
-#endif // ANTIFOLD_LOADER_H
+#endif // luaction_loader_H
+

@@ -1,6 +1,6 @@
 @echo off
 echo.
-echo   AntiFold Shield — Client Loader Build
+echo   Luaction — Client Loader Build
 echo   ══════════════════════════════════════
 echo.
 
@@ -15,11 +15,11 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo   [*] Compiling loader.cpp...
-cl.exe /nologo /O2 /W3 /EHsc /Fe:antifold_loader.exe loader.cpp /link /SUBSYSTEM:CONSOLE winhttp.lib bcrypt.lib advapi32.lib
+cl.exe /nologo /O2 /W3 /EHsc /Fe:luaction_loader.exe loader.cpp /link /SUBSYSTEM:CONSOLE winhttp.lib bcrypt.lib advapi32.lib
 
 if %ERRORLEVEL% equ 0 (
     echo.
-    echo   [+] Build successful: antifold_loader.exe
+    echo   [+] Build successful: luaction_loader.exe
     :: Clean up intermediate files
     del /Q *.obj 2>nul
     echo   [+] Cleaned up build artifacts
@@ -30,3 +30,4 @@ if %ERRORLEVEL% equ 0 (
 
 echo.
 pause
+

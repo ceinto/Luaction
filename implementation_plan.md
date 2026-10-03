@@ -1,4 +1,4 @@
-# Script Protection System — "AntiFold Shield"
+# Script Protection System — "Luaction"
 
 A Luarmor-inspired script protection platform with modern SaaS aesthetics, multi-layered security, and a centralized license management API.
 
@@ -137,10 +137,10 @@ CREATE INDEX idx_logs_created ON auth_logs(created_at);
 
 Server-side license management, authentication, kill-switch, and script delivery.
 
-#### [NEW] [package.json](file:///c:/Users/eulti/Desktop/Antifold/server/package.json)
+#### [NEW] [package.json](file:///c:/Users/eulti/Desktop/Luaction/server/package.json)
 - Express, better-sqlite3, crypto, cors, helmet, rate-limiter dependencies
 
-#### [NEW] [server.js](file:///c:/Users/eulti/Desktop/Antifold/server/server.js)
+#### [NEW] [server.js](file:///c:/Users/eulti/Desktop/Luaction/server/server.js)
 - Main Express server with middleware stack
 - API Routes:
   - `POST /api/auth` — Authenticate key + HWID, return encrypted script
@@ -158,11 +158,11 @@ Server-side license management, authentication, kill-switch, and script delivery
 - Rate limiting (60 req/min per IP)
 - API key auth middleware for admin routes
 
-#### [NEW] [db.js](file:///c:/Users/eulti/Desktop/Antifold/server/db.js)
+#### [NEW] [db.js](file:///c:/Users/eulti/Desktop/Luaction/server/db.js)
 - SQLite initialization with schema auto-creation
 - Helper functions for all CRUD operations
 
-#### [NEW] [crypto-utils.js](file:///c:/Users/eulti/Desktop/Antifold/server/crypto-utils.js)
+#### [NEW] [crypto-utils.js](file:///c:/Users/eulti/Desktop/Luaction/server/crypto-utils.js)
 - AES-256-GCM encrypt/decrypt
 - HKDF key derivation
 - Session nonce generation
@@ -174,7 +174,7 @@ Server-side license management, authentication, kill-switch, and script delivery
 
 SaaS-style management interface. Clean, dark, glassmorphism. No "hacker" shit.
 
-#### [NEW] [dashboard.html](file:///c:/Users/eulti/Desktop/Antifold/dashboard/dashboard.html)
+#### [NEW] [dashboard.html](file:///c:/Users/eulti/Desktop/Luaction/dashboard/dashboard.html)
 - Full admin dashboard with:
   - **Sidebar navigation**: Projects, Keys, Logs, Settings
   - **Project overview cards**: Active keys count, total auths, kill-switch toggle
@@ -184,7 +184,7 @@ SaaS-style management interface. Clean, dark, glassmorphism. No "hacker" shit.
 - Design: Inter font, charcoal/slate dark theme, glassmorphism cards, soft transitions
 - Tailwind CSS via CDN
 
-#### [NEW] [dashboard.js](file:///c:/Users/eulti/Desktop/Antifold/dashboard/dashboard.js)
+#### [NEW] [dashboard.js](file:///c:/Users/eulti/Desktop/Luaction/dashboard/dashboard.js)
 - API client for all admin endpoints
 - Dynamic DOM rendering
 - Real-time stats polling
@@ -196,7 +196,7 @@ SaaS-style management interface. Clean, dark, glassmorphism. No "hacker" shit.
 
 Ultra-minimalist. Single input. Nothing else.
 
-#### [NEW] [loader.html](file:///c:/Users/eulti/Desktop/Antifold/loader/loader.html)
+#### [NEW] [loader.html](file:///c:/Users/eulti/Desktop/Luaction/loader/loader.html)
 - Centered single license key input field
 - Glassmorphism container on dark gradient background
 - Border color transitions:
@@ -214,7 +214,7 @@ Ultra-minimalist. Single input. Nothing else.
 
 Lightweight native binary that handles HWID collection, server auth, and script delivery.
 
-#### [NEW] [loader.cpp](file:///c:/Users/eulti/Desktop/Antifold/client/loader.cpp)
+#### [NEW] [loader.cpp](file:///c:/Users/eulti/Desktop/Luaction/client/loader.cpp)
 - HWID generation: Combine `GetVolumeInformation` (disk serial) + `GetComputerName` + CPU ID (via `__cpuid`) → SHA256 hash
 - HTTPS POST to `/api/auth` with `{key, hwid, version}`
 - Parse JSON response, extract nonce + encrypted payload
@@ -223,10 +223,10 @@ Lightweight native binary that handles HWID collection, server auth, and script 
 - Clean error handling with user-friendly messages
 - Uses WinHTTP for HTTPS, CNG (bcrypt.h) for crypto — zero external dependencies
 
-#### [NEW] [loader.h](file:///c:/Users/eulti/Desktop/Antifold/client/loader.h)
+#### [NEW] [loader.h](file:///c:/Users/eulti/Desktop/Luaction/client/loader.h)
 - Structs, function declarations, constants
 
-#### [NEW] [build.bat](file:///c:/Users/eulti/Desktop/Antifold/client/build.bat)
+#### [NEW] [build.bat](file:///c:/Users/eulti/Desktop/Luaction/client/build.bat)
 - MSVC build script: `cl.exe /O2 loader.cpp /link winhttp.lib bcrypt.lib advapi32.lib`
 
 ---
@@ -234,7 +234,7 @@ Lightweight native binary that handles HWID collection, server auth, and script 
 ## Project Structure
 
 ```
-Antifold/
+Luaction/
 ├── server/                  # Backend API
 │   ├── package.json
 │   ├── server.js            # Express API server
@@ -273,3 +273,4 @@ Antifold/
 2. Open loader.html, test input field color transitions
 3. Build C++ loader with MSVC, verify HWID generation
 4. Full end-to-end: create project → create key → auth via loader → receive script
+

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════
-//  AntiFold Shield — Dashboard Logic
+//  Luaction — Dashboard Logic
 // ═══════════════════════════════════════════════════════
 
 const API = 'http://localhost:3000/api';
@@ -505,3 +505,4 @@ async function checkServer() {
 checkServer();
 renderProjects();
 setInterval(checkServer, 15000);
+
