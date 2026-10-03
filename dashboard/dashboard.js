@@ -93,8 +93,12 @@ function switchPage(page) {
 
 async function api(path, opts = {}) {
     try {
+        const apiKey = sessionStorage.getItem('luaction_key');
+        const headers = { 'Content-Type': 'application/json', ...opts.headers };
+        if (apiKey) headers['X-API-Key'] = apiKey;
+
         const res = await fetch(`${API}${path}`, {
-            headers: { 'Content-Type': 'application/json', ...opts.headers },
+            headers: headers,
             ...opts
         });
         const data = await res.json();
