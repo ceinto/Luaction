@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkpoint</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0e0f12;
+            background-image:
+                radial-gradient(ellipse at 30% 20%, rgba(139, 92, 246, 0.05) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 80%, rgba(59, 130, 246, 0.04) 0%, transparent 50%);
+        }
+        .container { position: relative; z-index: 1; width: 100%; max-width: 420px; padding: 0 20px; }
+        .card {
+            background: rgba(22, 23, 28, 0.65);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            padding: 36px 30px;
+            animation: fadeIn 0.6s ease-out;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        h1 { font-size: 17px; font-weight: 600; color: #fff; text-align: center; }
+        .sub { font-size: 12px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 6px; margin-bottom: 22px; }
+        .steps-bar { display: flex; gap: 6px; margin-bottom: 20px; }
+        .steps-bar div { flex: 1; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); transition: background 0.4s; }
+        .steps-bar div.done { background: #8b5cf6; }
+        .step-label { text-align: center; font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 14px; }
+        .btn {
+            display: block; width: 100%; padding: 12px; border: none; border-radius: 10px;
+            background: linear-gradient(135deg, #8b5cf6, #6366f1); color: #fff;
+            font-size: 14px; font-weight: 600; font-family: 'Inter', sans-serif;
+            cursor: pointer; transition: opacity 0.2s, transform 0.1s; text-align: center; text-decoration: none;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.5; cursor: wait; }
+        .btn.ghost { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); font-weight: 500; margin-top: 10px; }
+        .status { text-align: center; font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 14px; min-height: 16px; }
+        .status.error { color: rgba(239, 68, 68, 0.7); }
+        .status.ok { color: rgba(16, 185, 129, 0.8); }
+        .key-box {
+            background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.2);
+            border-radius: 10px; padding: 12px; margin-top: 16px; text-align: center;
+            font-family: monospace; font-size: 13px; color: #6ee7b7; word-break: break-all; cursor: pointer;
+        }
+        input.key-input {
+            width: 100%; padding: 12px 14px; background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; color: #e2e4e9;
+            font-size: 13px; outline: none; margin-bottom: 12px;
+        }
+        input.key-input:focus { border-color: rgba(139,92,246,0.4); }
+        .hint { font-size: 11px; color: rgba(255,255,255,0.3); text-align: center; margin-top: 12px; line-height: 1.5; }
+        .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1 id="title">☑ Checkpoint</h1>
+            <p class="sub" id="subtitle">Complete the steps to continue</p>
+            <div class="steps-bar" id="steps-bar"></div>
+            <p class="step-label" id="step-label">Loading…</p>
+            <div id="key-entry">
+                <input id="key-input" class="key-input" type="text" placeholder="License key (optional — leave empty to claim a new key)" autocomplete="off" spellcheck="false">
+            </div>
+            <button class="btn" id="continue-btn" style="display:none">Continue → Step 1</button>
+            <button class="btn ghost" id="start-btn">Start checkpoint</button>
+            <div class="key-box" id="key-box" style="display:none" title="Click to copy"></div>
+            <button class="btn" id="login-btn" style="display:none; margin-top:10px">Continue to login →</button>
+            <p class="status" id="status"></p>
+            <p class="hint">A new tab opens with a short ad link.<br>Finish it — you'll return here automatically.<br>Keep this tab open.</p>
+            <p class="hint" id="dev-hint" style="display:none"><a href="#" id="dev-verify" style="color:#8b5cf6">DEV: simulate step completion (BYPASS mode)</a></p>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+            ? 'http://localhost:3000/api'
+            : 'https://luaction-api.onrender.com/api';
+        const qs = new URLSearchParams(window.location.search);
+        const $ = id => document.getElementById(id);
+
+        let sessionId = qs.get('session') || null;
+        let projectId = qs.get('project') || null;
+        let hwid = null;
+        let existingKey = qs.get('key') || '';
+        let totalSteps = 0, verifiedSteps = 0, nextLink = null, checkpointToken = null, pollTimer = null;
+        const isDev = qs.get('dev') === '1';
+
+        function getHWID() {
+            let h = localStorage.getItem('af_hwid');
+            if (!h) {
+                const arr = new Uint8Array(32);
+                crypto.getRandomValues(arr);
+                h = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+                localStorage.setItem('af_hwid', h);
+            }
+            return h;
+        }
+
+        function setStatus(text, cls = '') {
+            const el = $('status');
+            el.textContent = text;
+            el.className = 'status ' + cls;
+        }
+
+        function renderBar() {
+            const bar = $('steps-bar');
+            bar.innerHTML = '';
+            for (let i = 0; i < totalSteps; i++) {
+                const d = document.createElement('div');
+                if (i < verifiedSteps) d.className = 'done';
+                bar.appendChild(d);
+            }
+            $('step-label').textContent = totalSteps
+                ? `Step ${Math.min(verifiedSteps + 1, totalSteps)} of ${totalSteps}` : '';
+            const btn = $('continue-btn');
+            if (nextLink && !checkpointToken) {
+                btn.style.display = '';
+                btn.textContent = `Continue → Step ${verifiedSteps + 1}`;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        async function fetchConfig() {
+            if (!projectId) return null;
+            const res = await fetch(`${API_URL}/checkpoint/config/${projectId}`);
+            if (!res.ok) throw new Error('Project not found');
+            return res.json();
+        }
+
+        async function start() {
+            $('start-btn').disabled = true;
+            setStatus('Starting…');
+            try {
+                hwid = getHWID();
+                const keyVal = ($('key-input').value || existingKey || '').trim();
+                const res = await fetch(`${API_URL}/checkpoint/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: projectId, hwid, key: keyVal || undefined })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || data.error);
+                sessionId = data.session_id;
+                totalSteps = data.total_steps;
+                verifiedSteps = 0;
+                nextLink = data.link_url;
+                if (keyVal) existingKey = keyVal;
+                history.replaceState(null, '', `?project=${projectId}&session=${sessionId}${existingKey ? `&key=${encodeURIComponent(existingKey)}` : ''}`);
+                $('key-entry').style.display = 'none';
+                $('start-btn').style.display = 'none';
+                renderBar();
+                openStep();
+                poll();
+            } catch (err) {
+                setStatus(err.message, 'error');
+                $('start-btn').disabled = false;
+            }
+        }
+
+        function openStep() {
+            if (nextLink) window.open(nextLink, '_blank');
+            setStatus('Complete the step in the new tab…');
+        }
+
+        async function poll() {
+            clearInterval(pollTimer);
+            pollTimer = setInterval(refresh, 3000);
+            await refresh();
+        }
+
+        async function refresh() {
+            try {
+                // Prefer session polling (exact); fall back to hwid polling (static-target mode)
+                let url = sessionId
+                    ? `${API_URL}/checkpoint/status?session=${encodeURIComponent(sessionId)}`
+                    : `${API_URL}/checkpoint/status?project_id=${encodeURIComponent(projectId)}&hwid=${encodeURIComponent(getHWID())}${existingKey ? `&key=${encodeURIComponent(existingKey)}` : ''}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (!res.ok) return;
+
+                if (data.done || data.completed) {
+                    checkpointToken = data.checkpoint_token || checkpointToken;
+                    verifiedSteps = data.verified_steps ?? totalSteps;
+                    totalSteps = data.total_steps ?? totalSteps;
+                    nextLink = null;
+                    renderBar();
+                    clearInterval(pollTimer);
+                    await finish();
+                    return;
+                }
+                // In-progress
+                totalSteps = data.total_steps ?? totalSteps;
+                if (data.verified_steps !== undefined && data.verified_steps !== verifiedSteps) {
+                    verifiedSteps = data.verified_steps;
+                    nextLink = data.next_link;
+                    renderBar();
+                    setStatus(`Step ${verifiedSteps} verified! Opening next step…`, 'ok');
+                    setTimeout(openStep, 1200);
+                } else {
+                    nextLink = data.next_link || nextLink;
+                    verifiedSteps = data.verified_steps ?? verifiedSteps;
+                    renderBar();
+                }
+            } catch { /* keep polling */ }
+        }
+
+        async function finish() {
+            $('step-label').textContent = 'Checkpoint complete ✓';
+            setStatus('Verified!', 'ok');
+            if (checkpointToken) {
+                try { localStorage.setItem(`af_cp_${projectId}`, JSON.stringify({ token: checkpointToken })); } catch {}
+            }
+            if (!existingKey) {
+                // Claim flow: mint a key
+                setStatus('Claiming your key…');
+                try {
+                    const res = await fetch(`${API_URL}/keys/claim`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ project_id: projectId, hwid: getHWID(), checkpoint_token: checkpointToken })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || data.error);
+                    existingKey = data.key;
+                    showKey(data.key);
+                } catch (err) {
+                    setStatus(err.message, 'error');
+                }
+            } else {
+                // Verify flow: hand back to loader with token
+                const btn = $('login-btn');
+                btn.style.display = '';
+                btn.onclick = () => {
+                    window.location.href = `loader.html?key=${encodeURIComponent(existingKey)}&cp=${encodeURIComponent(checkpointToken || '')}`;
+                };
+                setStatus('Verified — continue to login.', 'ok');
+            }
+        }
+
+        function showKey(key) {
+            const box = $('key-box');
+            box.style.display = '';
+            box.textContent = key;
+            box.onclick = () => navigator.clipboard.writeText(key).then(() => setStatus('Copied!', 'ok'));
+            const btn = $('login-btn');
+            btn.style.display = '';
+            btn.onclick = () => {
+                window.location.href = `loader.html?key=${encodeURIComponent(key)}&cp=${encodeURIComponent(checkpointToken || '')}`;
+            };
+            setStatus('Key claimed — copy it or continue to login.', 'ok');
+        }
+
+        async function init() {
+            if (qs.get('error') === 'verify_failed') setStatus('Linkvertise could not verify that visit — try the step again.', 'error');
+            if (qs.get('error') === 'wrong_step') setStatus('Wrong step order — resuming at the correct step.', 'error');
+            if (qs.get('done') === '1' && sessionId) setStatus('Final step received — confirming…', '');
+            if (existingKey) $('key-input').value = existingKey;
+
+            if (sessionId) {
+                // Returning from Linkvertise redirect (direct mode)
+                $('key-entry').style.display = 'none';
+                $('start-btn').style.display = 'none';
+                // Resolve project for polling fallback
+                setStatus('Confirming step…');
+                await refresh();
+                poll();
+                return;
+            }
+            if (!projectId) {
+                $('step-label').textContent = 'Missing project link';
+                setStatus('Open this page from the link your developer shared (?project=…).', 'error');
+                $('start-btn').style.display = 'none';
+                return;
+            }
+            try {
+                const cfg = await fetchConfig();
+                $('title').textContent = `☑ ${cfg.project_name || 'Checkpoint'}`;
+                $('subtitle').textContent = cfg.checkpoint_enabled
+                    ? `Complete ${cfg.total_steps} step${cfg.total_steps > 1 ? 's' : ''} to continue`
+                    : 'Checkpoint is not enabled for this project';
+                if (!cfg.checkpoint_enabled) { $('start-btn').style.display = 'none'; $('step-label').textContent = ''; return; }
+                totalSteps = cfg.total_steps;
+                renderBar();
+                $('step-label').textContent = `Step 1 of ${totalSteps}`;
+            } catch (err) {
+                setStatus(err.message, 'error');
+            }
+            if (isDev) {
+                $('dev-hint').style.display = '';
+                $('dev-verify').onclick = async (e) => {
+                    e.preventDefault();
+                    if (!sessionId) { setStatus('Start the checkpoint first.', 'error'); return; }
+                    const fakeHash = 'dev-' + Math.random().toString(16).slice(2) + Date.now().toString(16);
+                    await fetch(`${API_URL}/checkpoint/callback?session=${encodeURIComponent(sessionId)}&step=${verifiedSteps}&hash=${encodeURIComponent(fakeHash)}`, { redirect: 'manual' }).catch(() => {});
+                    setStatus('Simulated — confirming…');
+                    setTimeout(refresh, 1500);
+                };
+            }
+        }
+
+        $('start-btn').onclick = start;
+        $('continue-btn').onclick = openStep;
+        init();
+    </script>
+</body>
+</html>

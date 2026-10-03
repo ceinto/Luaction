@@ -151,6 +151,8 @@ async function renderProjects() {
         projects.forEach((p, i) => {
             const stats = allStats[i] || {};
             const isKilled = !!p.kill_switch;
+            const cpSteps = parseCpSteps(p);
+            const cpOn = !!p.checkpoint_enabled && cpSteps.length > 0;
             html += `
             <div class="glass rounded-2xl p-5 fade-up cursor-pointer hover:border-white/10 transition-all duration-200 group" onclick="selectProject('${p.id}')" style="animation-delay: ${i * 60}ms">
                 <div class="flex items-start justify-between mb-4">
@@ -158,9 +160,14 @@ async function renderProjects() {
                         <h3 class="text-sm font-semibold text-white group-hover:text-blue-400 transition-colors">${esc(p.name)}</h3>
                         <p class="text-[11px] text-gray-500 mt-0.5 font-mono">${p.id.substring(0, 16)}...</p>
                     </div>
+                    <div class="flex flex-col items-end gap-1.5">
                     <div class="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${isKilled ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}">
                         <span class="w-1.5 h-1.5 rounded-full ${isKilled ? 'bg-red-400' : 'bg-emerald-400 pulse-dot'}"></span>
                         ${isKilled ? 'Killed' : 'Active'}
+                    </div>
+                    <div class="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${cpOn ? 'bg-violet-500/10 text-violet-300' : 'bg-white/5 text-gray-500'}">
+                        ☑ ${cpOn ? cpSteps.length + ' step' + (cpSteps.length > 1 ? 's' : '') : 'No checkpoint'}
+                    </div>
                     </div>
                 </div>
                 <div class="grid grid-cols-3 gap-3">
@@ -180,6 +187,9 @@ async function renderProjects() {
                 <div class="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
                     <span class="text-[10px] text-gray-500">v${esc(p.version)}</span>
                     <div class="flex items-center gap-2">
+                        <button onclick="event.stopPropagation(); showCheckpointModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${cpOn ? 'bg-violet-500/10 text-violet-300 hover:bg-violet-500/20' : 'bg-white/5 text-gray-400 hover:bg-violet-500/10 hover:text-violet-300'} transition-all" title="Linkvertise checkpoint steps">
+                            ☑ Checkpoint
+                        </button>
                         <button onclick="event.stopPropagation(); toggleKillSwitch('${p.id}', ${!isKilled})" class="text-[10px] px-2 py-1 rounded-md ${isKilled ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'} transition-all" title="${isKilled ? 'Reactivate' : 'Kill Switch'}">
                             ${isKilled ? 'Activate' : 'Kill'}
                         </button>
@@ -218,6 +228,156 @@ async function deleteProject(id) {
     } catch (err) { toast(err.message, 'error'); }
 }
 
+// ── Checkpoint (Linkvertise) ───────────────────────────
+
+function parseCpSteps(p) {
+    if (!p || !p.checkpoint_steps) return [];
+    try {
+        const v = typeof p.checkpoint_steps === 'string' ? JSON.parse(p.checkpoint_steps) : p.checkpoint_steps;
+        return Array.isArray(v) ? v : [];
+    } catch { return []; }
+}
+
+function checkpointPageUrl(projectId) {
+    const base = window.location.origin;
+    // Served from /loader static; works locally and on Render
+    const path = window.location.pathname.includes('/dashboard')
+        ? window.location.pathname.replace('/dashboard', '/loader').replace(/\/[^/]*$/, '/checkpoint.html')
+        : '/loader/checkpoint.html';
+    return `${base}${path}?project=${projectId}`;
+}
+
+async function showCheckpointModal(projectId) {
+    let p;
+    try { p = await api(`/projects/${projectId}`); }
+    catch (err) { toast(err.message, 'error'); return; }
+
+    const steps = parseCpSteps(p);
+    while (steps.length < 1) steps.push('');
+    const enabled = !!p.checkpoint_enabled;
+    const token = p.linkvertise_token || '';
+    const cooldown = p.checkpoint_cooldown_hours || 24;
+
+    const stepsHtml = steps.map((s, i) => `
+        <div class="flex items-center gap-2" data-cp-step="${i}">
+            <span class="text-[10px] font-mono text-gray-500 w-10 shrink-0">Step ${i + 1}</span>
+            <input data-cp-url type="text" value="${esc(s)}" placeholder="https://linkvertise.com/..." class="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-violet-500/50 transition-colors font-mono">
+            ${steps.length > 1 ? `<button onclick="removeCpStep(this)" class="text-gray-500 hover:text-red-400 text-sm px-1 shrink-0">✕</button>` : ''}
+        </div>`).join('');
+
+    showModal(`
+        <h3 class="text-base font-semibold text-white mb-1">☑ Checkpoint — ${esc(p.name)}</h3>
+        <p class="text-[11px] text-gray-500 mb-4">Users complete your Linkvertise link(s) to claim a key and to authenticate. Verified server-side via Anti-Bypass.</p>
+        <div class="space-y-3">
+            <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                <input id="cp-enabled" type="checkbox" ${enabled ? 'checked' : ''} class="accent-violet-500 w-4 h-4">
+                Enable checkpoint for this project
+            </label>
+            <div>
+                <label class="text-[11px] text-gray-400 font-medium mb-1 block">Linkvertise API token <span class="text-gray-600">(publisher.linkvertise.com → API — or <span class="font-mono">BYPASS</span> for local testing)</span></label>
+                <input id="cp-token" type="password" value="${esc(token)}" placeholder="64-char token or BYPASS" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-violet-500/50 transition-colors font-mono">
+            </div>
+            <div>
+                <label class="text-[11px] text-gray-400 font-medium mb-1 block">Token validity after completion (hours)</label>
+                <input id="cp-cooldown" type="number" value="${cooldown}" min="1" max="720" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500/50 transition-colors">
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="text-[11px] text-gray-400 font-medium">Linkvertise links (1–5 steps)</label>
+                    <button onclick="addCpStep()" class="text-[11px] text-violet-300 hover:text-violet-200">+ Add step</button>
+                </div>
+                <div id="cp-steps" class="space-y-2">${stepsHtml}</div>
+            </div>
+            <div class="bg-white/[0.03] border border-white/5 rounded-lg p-3">
+                <p class="text-[11px] text-gray-400 font-medium mb-1">Linkvertise setup (per step)</p>
+                <ol class="text-[11px] text-gray-500 space-y-0.5 list-decimal list-inside">
+                    <li>Create a link at publisher.linkvertise.com</li>
+                    <li>Set its <span class="text-gray-300">Target URL</span> to the step URL below, then <button onclick="copyCpTargets('${p.id}')" class="text-violet-300 hover:text-violet-200 underline">copy all</button></li>
+                    <li>Turn <span class="text-gray-300">Anti-Bypass ON</span> for the link</li>
+                </ol>
+                <div id="cp-targets" class="mt-2 text-[10px] font-mono text-gray-600">Loading target URLs…</div>
+            </div>
+            <div>
+                <label class="text-[11px] text-gray-400 font-medium mb-1 block">User-facing checkpoint page (share this)</label>
+                <div class="flex items-center gap-2">
+                    <input type="text" readonly value="${checkpointPageUrl(p.id)}" onclick="this.select()" class="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-gray-400 font-mono focus:outline-none">
+                    <button onclick="copyText('${checkpointPageUrl(p.id)}')" class="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-300 text-[11px] rounded-lg transition-all shrink-0">Copy</button>
+                </div>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-5">
+            <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
+            <button onclick="saveCheckpoint('${p.id}')" class="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition-all">Save checkpoint</button>
+        </div>
+    `);
+    loadCpTargets(projectId);
+}
+
+async function loadCpTargets(projectId) {
+    try {
+        const data = await api(`/checkpoint/targets/${projectId}`);
+        const el = document.getElementById('cp-targets');
+        if (el) el.innerHTML = data.targets.map((t, i) => `<div class="truncate" title="${esc(t)}">Step ${i + 1}: <span class="text-gray-400">${esc(t)}</span></div>`).join('');
+    } catch {
+        const el = document.getElementById('cp-targets');
+        if (el) el.textContent = 'Could not load target URLs.';
+    }
+}
+
+async function copyCpTargets(projectId) {
+    try {
+        const data = await api(`/checkpoint/targets/${projectId}`);
+        await navigator.clipboard.writeText(data.targets.join('\n'));
+        toast('Target URLs copied', 'info');
+    } catch (err) { toast(err.message, 'error'); }
+}
+
+function addCpStep() {
+    const box = document.getElementById('cp-steps');
+    const count = box.querySelectorAll('[data-cp-step]').length;
+    if (count >= 5) { toast('Maximum 5 steps', 'error'); return; }
+    const div = document.createElement('div');
+    div.className = 'flex items-center gap-2';
+    div.dataset.cpStep = count;
+    div.innerHTML = `
+        <span class="text-[10px] font-mono text-gray-500 w-10 shrink-0">Step ${count + 1}</span>
+        <input data-cp-url type="text" value="" placeholder="https://linkvertise.com/..." class="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-violet-500/50 transition-colors font-mono">
+        <button onclick="removeCpStep(this)" class="text-gray-500 hover:text-red-400 text-sm px-1 shrink-0">✕</button>`;
+    box.appendChild(div);
+}
+
+function removeCpStep(btn) {
+    btn.closest('[data-cp-step]').remove();
+    document.querySelectorAll('#cp-steps [data-cp-step]').forEach((row, i) => {
+        row.dataset.cpStep = i;
+        row.querySelector('span').textContent = `Step ${i + 1}`;
+    });
+}
+
+async function saveCheckpoint(projectId) {
+    const enabled = document.getElementById('cp-enabled').checked;
+    const token = document.getElementById('cp-token').value.trim();
+    const cooldown = parseInt(document.getElementById('cp-cooldown').value) || 24;
+    const urls = [...document.querySelectorAll('#cp-steps [data-cp-url]')].map(i => i.value.trim()).filter(Boolean);
+
+    if (enabled && urls.length === 0) { toast('Add at least one Linkvertise link', 'error'); return; }
+
+    try {
+        await api(`/projects/${projectId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                checkpoint_enabled: enabled ? 1 : 0,
+                checkpoint_steps: urls,
+                linkvertise_token: token,
+                checkpoint_cooldown_hours: cooldown
+            })
+        });
+        hideModal();
+        toast('Checkpoint saved', 'success');
+        renderProjects();
+    } catch (err) { toast(err.message, 'error'); }
+}
+
 // ── Keys Page ────────────────────────────────────────
 
 async function renderKeys() {
@@ -233,14 +393,19 @@ async function renderKeys() {
         const project = await api(`/projects/${currentProjectId}`);
         const data = await api(`/keys/${currentProjectId}`);
         const keys = data.keys;
+        const cpSteps = parseCpSteps(project);
+        const cpOn = !!project.checkpoint_enabled && cpSteps.length > 0;
 
         let html = `
         <div class="mb-6 flex items-center justify-between">
             <div>
                 <h3 class="text-sm font-semibold text-white">${esc(project.name)}</h3>
-                <p class="text-xs text-gray-500">${data.total} total keys</p>
+                <p class="text-xs text-gray-500">${data.total} total keys · ${cpOn ? `☑ Checkpoint ON (${cpSteps.length} step${cpSteps.length > 1 ? 's' : ''})` : 'Checkpoint off'}</p>
             </div>
             <div class="flex gap-2">
+                <button onclick="showCheckpointModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-violet-500/10 hover:text-violet-300 text-gray-300 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                    ☑ Checkpoint
+                </button>
                 <button onclick="showCreateKeyModal()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                     Generate Keys

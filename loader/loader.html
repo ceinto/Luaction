@@ -354,6 +354,7 @@
             }
 
             setState('processing');
+            hideCpButton();
 
             try {
                 const res = await fetch(`${API_URL}/auth`, {
@@ -362,13 +363,21 @@
                     body: JSON.stringify({
                         key: key,
                         hwid: getHWID(),
-                        version: '1.0.0'
+                        version: '1.0.0',
+                        checkpoint_token: savedCpToken(key)
                     })
                 });
 
                 const data = await res.json();
 
                 if (!res.ok) {
+                    if (data.error === 'CHECKPOINT_REQUIRED') {
+                        setState('error');
+                        const n = data.checkpoint?.total_steps || '?';
+                        setStatus(`Checkpoint required — complete ${n} step${n === 1 ? '' : 's'} to continue`, 'error');
+                        showCpButton(data.checkpoint?.project_id, key);
+                        return;
+                    }
                     setState('error');
                     const messages = {
                         'INVALID_KEY': 'Invalid license key',
@@ -399,6 +408,38 @@
             let v = input.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
             input.value = v;
         });
+
+        // ── Checkpoint support (Linkvertise) ──
+        // checkpoint.html links back here as loader.html?key=...&cp=<checkpoint_token>
+        function savedCpToken(key) {
+            try {
+                const raw = localStorage.getItem('af_cp_saved');
+                if (!raw) return undefined;
+                const saved = JSON.parse(raw);
+                if (saved.key === key && saved.token) return saved.token;
+            } catch {}
+            return undefined;
+        }
+        function showCpButton(projectId, key) {
+            hideCpButton();
+            if (!projectId) return;
+            const a = document.createElement('a');
+            a.id = 'cp-btn';
+            a.href = `checkpoint.html?project=${encodeURIComponent(projectId)}&key=${encodeURIComponent(key)}`;
+            a.textContent = '☑ Complete checkpoint';
+            a.style.cssText = 'display:block;text-align:center;margin-top:12px;padding:10px;border-radius:10px;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.3);color:#c4b5fd;font-size:12px;font-weight:500;text-decoration:none;transition:background 0.3s';
+            document.querySelector('.card').appendChild(a);
+        }
+        function hideCpButton() {
+            document.getElementById('cp-btn')?.remove();
+        }
+        (function initFromQuery() {
+            const q = new URLSearchParams(window.location.search);
+            if (q.get('key')) input.value = q.get('key').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+            if (q.get('key') && q.get('cp')) {
+                try { localStorage.setItem('af_cp_saved', JSON.stringify({ key: q.get('key'), token: q.get('cp') })); } catch {}
+            }
+        })();
 
         input.focus();
     </script>

@@ -22,6 +22,10 @@ function init() {
             version_hash TEXT DEFAULT '',
             kill_switch INTEGER DEFAULT 0,
             max_keys    INTEGER DEFAULT 100,
+            checkpoint_enabled INTEGER DEFAULT 0,
+            checkpoint_steps TEXT DEFAULT '[]',
+            linkvertise_token TEXT DEFAULT '',
+            checkpoint_cooldown_hours INTEGER DEFAULT 24,
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -58,7 +62,48 @@ function init() {
         CREATE INDEX IF NOT EXISTS idx_keys_value ON keys(key_value);
         CREATE INDEX IF NOT EXISTS idx_logs_project ON auth_logs(project_id);
         CREATE INDEX IF NOT EXISTS idx_logs_created ON auth_logs(created_at);
+
+        CREATE TABLE IF NOT EXISTS checkpoint_sessions (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            hwid        TEXT DEFAULT NULL,
+            key_value   TEXT DEFAULT NULL,
+            last_ip     TEXT DEFAULT NULL,
+            current_step INTEGER DEFAULT 0,
+            verified_steps INTEGER DEFAULT 0,
+            checkpoint_token TEXT DEFAULT NULL,
+            token_expires_at DATETIME DEFAULT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS checkpoint_verifications (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT,
+            project_id  TEXT,
+            step        INTEGER DEFAULT 0,
+            hash        TEXT,
+            status      TEXT NOT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cp_session ON checkpoint_sessions(project_id);
+        CREATE INDEX IF NOT EXISTS idx_cp_token ON checkpoint_sessions(checkpoint_token);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_verify_hash ON checkpoint_verifications(hash);
     `);
+
+    // ── Migrate existing DBs (added after initial release) ──
+    try {
+        const cols = db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name);
+        const addCol = (name, def) => {
+            if (!cols.includes(name)) db.exec(`ALTER TABLE projects ADD COLUMN ${name} ${def}`);
+        };
+        addCol('checkpoint_enabled', 'INTEGER DEFAULT 0');
+        addCol('checkpoint_steps', "TEXT DEFAULT '[]'");
+        addCol('linkvertise_token', "TEXT DEFAULT ''");
+        addCol('checkpoint_cooldown_hours', 'INTEGER DEFAULT 24');
+        const cpCols = db.prepare(`PRAGMA table_info(checkpoint_sessions)`).all().map(c => c.name);
+        if (!cpCols.includes('last_ip')) db.exec(`ALTER TABLE checkpoint_sessions ADD COLUMN last_ip TEXT DEFAULT NULL`);
+    } catch { /* fresh DB already has columns */ }
 
     return db;
 }
@@ -91,7 +136,8 @@ function listProjects() {
 }
 
 function updateProject(id, fields) {
-    const allowed = ['name', 'description', 'script_data', 'version', 'version_hash', 'kill_switch', 'max_keys'];
+    const allowed = ['name', 'description', 'script_data', 'version', 'version_hash', 'kill_switch', 'max_keys',
+        'checkpoint_enabled', 'checkpoint_steps', 'linkvertise_token', 'checkpoint_cooldown_hours'];
     const updates = [];
     const values = [];
 
@@ -247,11 +293,157 @@ function getProjectStats(projectId) {
     };
 }
 
+// ── Checkpoints (Linkvertise-gated) ────────────────────
+
+function parseSteps(project) {
+    if (!project) return [];
+    try {
+        const v = typeof project.checkpoint_steps === 'string'
+            ? JSON.parse(project.checkpoint_steps)
+            : project.checkpoint_steps;
+        return Array.isArray(v) ? v.filter(s => typeof s === 'string' && s.trim()) : [];
+    } catch { return []; }
+}
+
+function isCheckpointRequired(project) {
+    if (!project || !project.checkpoint_enabled) return false;
+    return parseSteps(project).length > 0;
+}
+
+function createCheckpointSession(projectId, { hwid, key_value, ip }) {
+    const id = randomHex(16);
+    db.prepare(`
+        INSERT INTO checkpoint_sessions (id, project_id, hwid, key_value, last_ip, current_step, verified_steps)
+        VALUES (?, ?, ?, ?, ?, 0, 0)
+    `).run(id, projectId, hwid || null, key_value || null, ip || null);
+    return getCheckpointSession(id);
+}
+
+function getCheckpointSession(id) {
+    return db.prepare('SELECT * FROM checkpoint_sessions WHERE id = ?').get(id);
+}
+
+function getSessionByToken(token) {
+    if (!token) return null;
+    return db.prepare('SELECT * FROM checkpoint_sessions WHERE checkpoint_token = ?').get(token);
+}
+
+// Valid (non-expired) checkpoint token for this project + hwid/key combo.
+// Used by /api/auth and /api/keys/claim.
+function getValidCheckpoint(projectId, { hwid, key_value, checkpoint_token }) {
+    if (checkpoint_token) {
+        const s = getSessionByToken(checkpoint_token);
+        if (!s || s.project_id !== projectId) return null;
+        if (!s.token_expires_at || new Date(s.token_expires_at) < new Date()) return null;
+        if (hwid && s.hwid && s.hwid !== hwid) return null;
+        if (key_value && s.key_value && s.key_value !== key_value) return null;
+        return s;
+    }
+    // Fallback: any unexpired token bound to same hwid (+key if given)
+    let row = null;
+    if (key_value) {
+        row = db.prepare(`
+            SELECT * FROM checkpoint_sessions
+            WHERE project_id = ? AND key_value = ?
+              AND checkpoint_token IS NOT NULL
+              AND token_expires_at > datetime('now')
+            ORDER BY token_expires_at DESC LIMIT 1
+        `).get(projectId, key_value);
+        if (row && hwid && row.hwid && row.hwid !== hwid) return null;
+        if (row) return row;
+    }
+    if (hwid) {
+        row = db.prepare(`
+            SELECT * FROM checkpoint_sessions
+            WHERE project_id = ? AND hwid = ?
+              AND checkpoint_token IS NOT NULL
+              AND token_expires_at > datetime('now')
+            ORDER BY token_expires_at DESC LIMIT 1
+        `).get(projectId, hwid);
+        if (row) return row;
+    }
+    return null;
+}
+
+function markStepVerified(sessionId, step, hash, cooldownHours) {
+    const s = getCheckpointSession(sessionId);
+    if (!s) return null;
+    const project = getProject(s.project_id);
+    const steps = parseSteps(project);
+    const cooldown = Number(project?.checkpoint_cooldown_hours ?? cooldownHours ?? 24) || 24;
+
+    db.prepare(`
+        INSERT OR IGNORE INTO checkpoint_verifications (session_id, project_id, step, hash, status)
+        VALUES (?, ?, ?, ?, 'VERIFIED')
+    `).run(sessionId, s.project_id, step, hash);
+
+    const nextVerified = Math.max(s.verified_steps, step + 1);
+    const done = nextVerified >= steps.length;
+
+    let token = s.checkpoint_token;
+    let expires = s.token_expires_at;
+    if (done) {
+        token = randomHex(32);
+        expires = new Date(Date.now() + cooldown * 3600 * 1000).toISOString();
+    }
+
+    db.prepare(`
+        UPDATE checkpoint_sessions
+        SET verified_steps = ?, current_step = ?, checkpoint_token = ?, token_expires_at = ?
+        WHERE id = ?
+    `).run(nextVerified, nextVerified, token, expires, sessionId);
+    return { session: getCheckpointSession(sessionId), done };
+}
+
+function logCheckpointAttempt(sessionId, projectId, step, hash, status) {
+    try {
+        db.prepare(`
+            INSERT OR IGNORE INTO checkpoint_verifications (session_id, project_id, step, hash, status)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(sessionId, projectId, step, hash, status);
+    } catch { /* ignore */ }
+}
+
+// Attribute a verified Linkvertise hash to the latest waiting session
+// (static Target URL mode — Linkvertise can't carry the session id).
+// Returns the updated session, or null if nothing is waiting.
+function claimCheckpointByIP(projectId, step, hash, ip) {
+    // Reject hash replays (Linkvertise hashes are single-use)
+    const seen = hash ? db.prepare('SELECT id FROM checkpoint_verifications WHERE hash = ?').get(hash) : null;
+    if (seen) return null;
+
+    let s = db.prepare(`
+        SELECT * FROM checkpoint_sessions
+        WHERE project_id = ? AND verified_steps = ?
+          AND datetime(created_at) > datetime('now', '-30 minutes')
+          AND (last_ip = ? OR last_ip IS NULL)
+        ORDER BY datetime(created_at) DESC LIMIT 1
+    `).get(projectId, step, ip);
+
+    if (!s) {
+        // Localhost/dev fallback: IPs often differ (::1 vs 127.0.0.1)
+        s = db.prepare(`
+            SELECT * FROM checkpoint_sessions
+            WHERE project_id = ? AND verified_steps = ?
+              AND datetime(created_at) > datetime('now', '-5 minutes')
+            ORDER BY datetime(created_at) DESC LIMIT 1
+        `).get(projectId, step);
+    }
+    if (!s) return null;
+
+    const project = getProject(projectId);
+    const { session } = markStepVerified(s.id, step, hash, project?.checkpoint_cooldown_hours);
+    return session;
+}
+
 module.exports = {
     init,
     createProject, getProject, getProjectByApiKey, listProjects, updateProject, deleteProject,
     createKey, createBulkKeys, getKey, getKeyByValue, listKeys, countKeys, updateKey, deleteKey, resetHwid,
     logAuth, getAuthLogs,
-    getProjectStats
+    getProjectStats,
+    parseSteps, isCheckpointRequired, createCheckpointSession, getCheckpointSession,
+    getSessionByToken, getValidCheckpoint, markStepVerified, logCheckpointAttempt,
+    claimCheckpointByIP
 };
 
