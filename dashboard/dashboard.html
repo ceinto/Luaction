@@ -2,6 +2,12 @@
 <html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
+    <!-- Auth guard: redirect to login if no session key -->
+    <script>
+        if (!sessionStorage.getItem('luaction_key')) {
+            window.location.replace('index.html');
+        }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Luaction — Dashboard</title>
     <meta name="description" content="Manage your script protection, license keys, and analytics.">
