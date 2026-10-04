@@ -35,13 +35,14 @@
         .glass { background: rgba(26, 27, 31, 0.6); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.06); }
         /* Flat variant: same look, zero blur cost — for repeated rows/cards/tables */
         .flat { background: rgba(22, 23, 28, 0.92); border: 1px solid rgba(255,255,255,0.06); }
+        /* Solid chrome: sidebar + sticky header repaint every scroll frame,
+           so they get zero-blur fills instead of backdrop-filter */
+        .solid-panel { background: #16171c; border-color: rgba(255,255,255,0.05); }
         .glass-strong { background: rgba(26, 27, 31, 0.85); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.08); }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
-        @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-        .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
         @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
         .fade-up { animation: fadeUp 0.4s ease-out both; }
         @keyframes slideIn { from { transform:translateX(100%); opacity:0; } to { transform:translateX(0); opacity:1; } }
@@ -67,7 +68,7 @@
     <div class="ambient-bg"></div>
     <div class="flex h-screen relative z-10">
         <!-- Sidebar -->
-        <aside class="w-64 glass-strong flex flex-col border-r border-white/5 shrink-0">
+        <aside class="w-64 flex flex-col border-r solid-panel shrink-0">
             <div class="px-6 py-5 border-b border-white/5">
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
@@ -95,7 +96,7 @@
             </nav>
             <div class="px-4 py-3 border-t border-white/5">
                 <div class="flex items-center gap-2 text-xs text-gray-500">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                     <span id="server-status">Connecting...</span>
                 </div>
             </div>
@@ -103,13 +104,13 @@
 
         <!-- Main -->
         <main class="flex-1 overflow-y-auto">
-            <header class="sticky top-0 z-20 glass-strong border-b border-white/5 px-8 py-4">
+            <header class="sticky top-0 z-20 solid-panel border-b px-8 py-4">
                 <div class="flex items-center justify-between">
                     <div>
                         <h2 class="text-lg font-semibold text-white" id="page-title">Projects</h2>
                         <p class="text-xs text-gray-500 mt-0.5" id="page-subtitle">Manage your protected scripts</p>
                     </div>
-                    <button onclick="showCreateModal()" id="btn-create-main" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-all duration-200 hover:shadow-lg hover:shadow-blue-500/20 flex items-center gap-2">
+                    <button onclick="showCreateModal()" id="btn-create-main" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                         Create
                     </button>

@@ -114,12 +114,31 @@ async function api(path, opts = {}) {
 
 // ── Render Pages ─────────────────────────────────────
 
-function renderPage() {
-    switch (currentPage) {
-        case 'projects': renderProjects(); break;
-        case 'keys': renderKeys(); break;
-        case 'logs': renderLogs(); break;
+// Stale-while-revalidate: paint the last render instantly, refresh in
+// the background. Kills the spinner flash on every tab switch.
+const pageCache = {};
+function cacheKey() { return currentPage + '/' + (currentProjectId || ''); }
+let renderSeq = 0;
+
+async function renderPage() {
+    const key = cacheKey();
+    const mySeq = ++renderSeq;
+    const area = document.getElementById('content-area');
+    if (pageCache[key]) {
+        area.innerHTML = pageCache[key];
     }
+    try {
+        switch (currentPage) {
+            case 'projects': await renderProjects(); break;
+            case 'keys': await renderKeys(); break;
+            case 'logs': await renderLogs(); break;
+        }
+        // Only cache if the user hasn't moved on mid-render; the newer
+        // cycle in flight will paint and cache the current page itself.
+        if (mySeq === renderSeq && cacheKey() === key) {
+            pageCache[key] = document.getElementById('content-area').innerHTML;
+        }
+    } catch { /* renderers handle their own errors */ }
 }
 
 // ── Projects Page ────────────────────────────────────
@@ -138,7 +157,7 @@ async function renderProjects() {
                     </div>
                     <h3 class="text-sm font-medium text-gray-300 mb-1">No projects yet</h3>
                     <p class="text-xs text-gray-500 mb-4">Create your first project to get started</p>
-                    <button onclick="showCreateModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-all">Create Project</button>
+                    <button onclick="showCreateModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors">Create Project</button>
                 </div>`;
             return;
         }
@@ -152,7 +171,7 @@ async function renderProjects() {
             const scriptBytes = (p.script_data || '').length;
             const hasScript = scriptBytes > 0;
             html += `
-            <div class="flat rounded-2xl p-5 cursor-pointer hover:border-white/10 transition-all duration-200 group" onclick="selectProject('${p.id}')">
+            <div class="flat rounded-2xl p-5 cursor-pointer hover:border-white/10 transition-colors group" onclick="selectProject('${p.id}')">
                 <div class="flex items-start justify-between mb-4">
                     <div>
                         <h3 class="text-sm font-semibold text-white group-hover:text-blue-400 transition-colors">${esc(p.name)}</h3>
@@ -160,7 +179,7 @@ async function renderProjects() {
                     </div>
                     <div class="flex flex-col items-end gap-1.5">
                     <div class="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${isKilled ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}">
-                        <span class="w-1.5 h-1.5 rounded-full ${isKilled ? 'bg-red-400' : 'bg-emerald-400 pulse-dot'}"></span>
+                        <span class="w-1.5 h-1.5 rounded-full ${isKilled ? 'bg-red-400' : 'bg-emerald-400'}"></span>
                         ${isKilled ? 'Killed' : 'Active'}
                     </div>
                     <div class="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${cpOn ? 'bg-violet-500/10 text-violet-300' : 'bg-white/5 text-gray-500'}">
@@ -188,16 +207,16 @@ async function renderProjects() {
                 <div class="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
                     <span class="text-[10px] text-gray-500">v${esc(p.version)}</span>
                     <div class="flex items-center gap-2">
-                        <button onclick="event.stopPropagation(); showScriptModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${hasScript ? 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'bg-white/5 text-gray-400 hover:bg-emerald-500/10 hover:text-emerald-300'} transition-all" title="Upload protected script">
+                        <button onclick="event.stopPropagation(); showScriptModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${hasScript ? 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'bg-white/5 text-gray-400 hover:bg-emerald-500/10 hover:text-emerald-300'} transition-colors" title="Upload protected script">
                             &lt;/&gt; Script
                         </button>
-                        <button onclick="event.stopPropagation(); showCheckpointModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${cpOn ? 'bg-violet-500/10 text-violet-300 hover:bg-violet-500/20' : 'bg-white/5 text-gray-400 hover:bg-violet-500/10 hover:text-violet-300'} transition-all" title="Linkvertise checkpoint steps">
+                        <button onclick="event.stopPropagation(); showCheckpointModal('${p.id}')" class="text-[10px] px-2 py-1 rounded-md ${cpOn ? 'bg-violet-500/10 text-violet-300 hover:bg-violet-500/20' : 'bg-white/5 text-gray-400 hover:bg-violet-500/10 hover:text-violet-300'} transition-colors" title="Linkvertise checkpoint steps">
                             ☑ Checkpoint
                         </button>
-                        <button onclick="event.stopPropagation(); toggleKillSwitch('${p.id}', ${!isKilled})" class="text-[10px] px-2 py-1 rounded-md ${isKilled ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'} transition-all" title="${isKilled ? 'Reactivate' : 'Kill Switch'}">
+                        <button onclick="event.stopPropagation(); toggleKillSwitch('${p.id}', ${!isKilled}, this)" class="text-[10px] px-2 py-1 rounded-md ${isKilled ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'} transition-colors" title="${isKilled ? 'Reactivate' : 'Kill Switch'}">
                             ${isKilled ? 'Activate' : 'Kill'}
                         </button>
-                        <button onclick="event.stopPropagation(); deleteProject('${p.id}')" class="text-[10px] px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-all">Delete</button>
+                        <button onclick="event.stopPropagation(); deleteProject('${p.id}', this)" class="text-[10px] px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-colors">Delete</button>
                     </div>
                 </div>
             </div>`;
@@ -228,21 +247,42 @@ function selectProject(id) {
     switchPage('keys');
 }
 
-async function toggleKillSwitch(id, value) {
+// Busy-button helper: instant visual feedback in the same frame as the
+// click (disable + label), restored when the request settles.
+function busyBtn(btn, label) {
+    if (!btn || btn.disabled || btn.dataset.busy) return () => {};
+    const prevHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.dataset.busy = '1';
+    btn.style.opacity = '0.55';
+    btn.style.cursor = 'wait';
+    if (label !== undefined) btn.innerHTML = label;
+    return () => {
+        delete btn.dataset.busy;
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.style.cursor = '';
+        if (btn.isConnected) btn.innerHTML = prevHtml;
+    };
+}
+
+async function toggleKillSwitch(id, value, btn) {
+    const done = busyBtn(btn, value ? 'Killing…' : 'Activating…');
     try {
         await api(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ kill_switch: value ? 1 : 0 }) });
         toast(value ? 'Project killed' : 'Project reactivated', value ? 'error' : 'success');
-        renderProjects();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
-async function deleteProject(id) {
+async function deleteProject(id, btn) {
     if (!confirm('Delete this project and all its keys? This cannot be undone.')) return;
+    const done = busyBtn(btn, 'Deleting…');
     try {
         await api(`/projects/${id}`, { method: 'DELETE' });
         toast('Project deleted', 'success');
-        renderProjects();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
 // ── Script Upload ────────────────────────────────────
@@ -292,7 +332,7 @@ async function showScriptModal(projectId) {
             ${current ? `<button onclick="clearScript('${p.id}')" class="px-3 py-2 text-[11px] text-red-400/70 hover:text-red-400 transition-colors">Remove script</button>` : '<span></span>'}
             <div class="flex gap-2">
                 <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
-                <button onclick="saveScript('${p.id}')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-all">Upload script</button>
+                <button onclick="saveScript('${p.id}', this)" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-colors">Upload script</button>
             </div>
         </div>
     `);
@@ -325,11 +365,13 @@ async function showScriptModal(projectId) {
     }
 }
 
-async function saveScript(projectId) {
+async function saveScript(projectId, btn) {
     const text = document.getElementById('script-text').value;
     const version = document.getElementById('script-version').value.trim() || '1.0.0';
     if (!text.trim()) { toast('Script is empty — paste source or upload a file', 'error'); return; }
-    if (new Blob([text]).size > MAX_SCRIPT_BYTES) { toast('Script exceeds 2 MB', 'error'); return; }
+    const bytes = new Blob([text]).size;
+    if (bytes > MAX_SCRIPT_BYTES) { toast('Script exceeds 2 MB', 'error'); return; }
+    const done = busyBtn(btn, `Uploading ${fmtBytes(bytes)}…`);
     try {
         const updated = await api(`/projects/${projectId}`, {
             method: 'PATCH',
@@ -338,7 +380,7 @@ async function saveScript(projectId) {
         hideModal();
         toast(`Script uploaded · v${updated.version} · ${updated.version_hash}`, 'success');
         renderPage();
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
 async function clearScript(projectId) {
@@ -432,13 +474,13 @@ async function showCheckpointModal(projectId) {
                 <label class="text-[11px] text-gray-400 font-medium mb-1 block">User-facing checkpoint page (share this)</label>
                 <div class="flex items-center gap-2">
                     <input type="text" readonly value="${checkpointPageUrl(p.id)}" onclick="this.select()" class="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-gray-400 font-mono focus:outline-none">
-                    <button onclick="copyText('${checkpointPageUrl(p.id)}')" class="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-300 text-[11px] rounded-lg transition-all shrink-0">Copy</button>
+                    <button onclick="copyText('${checkpointPageUrl(p.id)}')" class="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-300 text-[11px] rounded-lg transition-colors shrink-0">Copy</button>
                 </div>
             </div>
             <div>
                 <label class="text-[11px] text-gray-400 font-medium mb-1 block">In-game loader script (native GUI, Get Key shows the site URL)</label>
                 <p class="text-[11px] text-gray-600 mb-2">Give this script to users — they run it in their executor. No browser needed in-game.</p>
-                <button onclick="copyLoaderStub('${p.id}')" class="px-3 py-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-200 text-[11px] font-medium rounded-lg transition-all">⧉ Copy loader script</button>
+                <button onclick="copyLoaderStub('${p.id}')" class="px-3 py-2 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-200 text-[11px] font-medium rounded-lg transition-colors">⧉ Copy loader script</button>
             </div>
             <div>
                 <div class="flex items-center justify-between mb-1">
@@ -450,7 +492,7 @@ async function showCheckpointModal(projectId) {
         </div>
         <div class="flex justify-end gap-2 mt-5">
             <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
-            <button onclick="saveCheckpoint('${p.id}')" class="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition-all">Save checkpoint</button>
+            <button onclick="saveCheckpoint('${p.id}', this)" class="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition-colors">Save checkpoint</button>
         </div>
     `);
     loadCpTargets(projectId);
@@ -558,7 +600,7 @@ function removeCpStep(btn) {
     });
 }
 
-async function saveCheckpoint(projectId) {
+async function saveCheckpoint(projectId, btn) {
     const enabled = document.getElementById('cp-enabled').checked;
     const token = document.getElementById('cp-token').value.trim();
     const cooldown = parseInt(document.getElementById('cp-cooldown').value) || 24;
@@ -566,6 +608,7 @@ async function saveCheckpoint(projectId) {
 
     if (enabled && urls.length === 0) { toast('Add at least one Linkvertise link', 'error'); return; }
 
+    const done = busyBtn(btn, 'Saving…');
     try {
         await api(`/projects/${projectId}`, {
             method: 'PATCH',
@@ -578,8 +621,8 @@ async function saveCheckpoint(projectId) {
         });
         hideModal();
         toast('Checkpoint saved', 'success');
-        renderProjects();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
 // ── Keys Page ────────────────────────────────────────
@@ -591,7 +634,10 @@ async function renderKeys() {
         return;
     }
 
-    area.innerHTML = '<div class="flex items-center justify-center h-40"><div class="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div></div>';
+    // Skip the spinner when cached content is already painted.
+    if (!pageCache[cacheKey()]) {
+        area.innerHTML = '<div class="flex items-center justify-center h-40"><div class="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div></div>';
+    }
 
     try {
         const [project, data] = await Promise.all([
@@ -609,13 +655,13 @@ async function renderKeys() {
                 <p class="text-xs text-gray-500">${data.total} total keys · ${cpOn ? `☑ Checkpoint ON (${cpSteps.length} step${cpSteps.length > 1 ? 's' : ''})` : 'Checkpoint off'}</p>
             </div>
             <div class="flex gap-2">
-                <button onclick="showScriptModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-300 text-gray-300 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <button onclick="showScriptModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-300 text-gray-300 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
                     &lt;/&gt; Script
                 </button>
-                <button onclick="showCheckpointModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-violet-500/10 hover:text-violet-300 text-gray-300 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <button onclick="showCheckpointModal('${esc(project.id)}')" class="px-3 py-1.5 bg-white/5 hover:bg-violet-500/10 hover:text-violet-300 text-gray-300 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
                     ☑ Checkpoint
                 </button>
-                <button onclick="showCreateKeyModal()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <button onclick="showCreateKeyModal()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                     Generate Keys
                 </button>
@@ -659,10 +705,10 @@ async function renderKeys() {
                         <td class="px-4 py-3 text-gray-500">${lastUsed}</td>
                         <td class="px-4 py-3 text-right">
                             <div class="flex items-center justify-end gap-1">
-                                ${k.hwid ? `<button onclick="resetHwid('${k.id}')" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-blue-500/10 hover:text-blue-400 transition-all text-[10px]">Reset HWID</button>` : ''}
-                                <button onclick="toggleKey('${k.id}', ${k.is_active ? 0 : 1})" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-yellow-500/10 hover:text-yellow-400 transition-all text-[10px]">${k.is_active ? 'Disable' : 'Enable'}</button>
-                                <button onclick="blacklistKey('${k.id}', ${k.is_blacklisted ? 0 : 1})" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-all text-[10px]">${k.is_blacklisted ? 'Unblock' : 'Block'}</button>
-                                <button onclick="deleteKey('${k.id}')" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-all text-[10px]">✕</button>
+                                ${k.hwid ? `<button onclick="resetHwid('${k.id}', this)" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-blue-500/10 hover:text-blue-400 transition-colors text-[10px]">Reset HWID</button>` : ''}
+                                <button onclick="toggleKey('${k.id}', ${k.is_active ? 0 : 1}, this)" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-yellow-500/10 hover:text-yellow-400 transition-colors text-[10px]">${k.is_active ? 'Disable' : 'Enable'}</button>
+                                <button onclick="blacklistKey('${k.id}', ${k.is_blacklisted ? 0 : 1}, this)" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-colors text-[10px]">${k.is_blacklisted ? 'Unblock' : 'Block'}</button>
+                                <button onclick="deleteKey('${k.id}', this)" class="px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-colors text-[10px]">✕</button>
                             </div>
                         </td>
                     </tr>`;
@@ -679,36 +725,40 @@ async function renderKeys() {
 
 // ── Key Actions ──────────────────────────────────────
 
-async function resetHwid(keyId) {
+async function resetHwid(keyId, btn) {
+    const done = busyBtn(btn, '…');
     try {
         await api(`/keys/reset-hwid/${keyId}`, { method: 'POST' });
         toast('HWID reset', 'success');
-        renderKeys();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
-async function toggleKey(keyId, active) {
+async function toggleKey(keyId, active, btn) {
+    const done = busyBtn(btn, '…');
     try {
         await api(`/keys/update/${keyId}`, { method: 'PATCH', body: JSON.stringify({ is_active: active }) });
         toast(active ? 'Key enabled' : 'Key disabled', 'info');
-        renderKeys();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
-async function blacklistKey(keyId, blacklisted) {
+async function blacklistKey(keyId, blacklisted, btn) {
+    const done = busyBtn(btn, '…');
     try {
         await api(`/keys/update/${keyId}`, { method: 'PATCH', body: JSON.stringify({ is_blacklisted: blacklisted }) });
         toast(blacklisted ? 'Key blacklisted' : 'Key unblocked', blacklisted ? 'error' : 'success');
-        renderKeys();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
-async function deleteKey(keyId) {
+async function deleteKey(keyId, btn) {
+    const done = busyBtn(btn, '…');
     try {
         await api(`/keys/${keyId}`, { method: 'DELETE' });
         toast('Key deleted', 'success');
-        renderKeys();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
 // ── Logs Page ────────────────────────────────────────
@@ -720,7 +770,10 @@ async function renderLogs() {
         return;
     }
 
-    area.innerHTML = '<div class="flex items-center justify-center h-40"><div class="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div></div>';
+    // Skip the spinner when cached content is already painted.
+    if (!pageCache[cacheKey()]) {
+        area.innerHTML = '<div class="flex items-center justify-center h-40"><div class="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div></div>';
+    }
 
     try {
         const logs = await api(`/logs/${currentProjectId}`);
@@ -789,7 +842,7 @@ function showCreateModal() {
         </div>
         <div class="flex justify-end gap-2 mt-5">
             <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
-            <button onclick="createProject()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-all">Create</button>
+            <button onclick="createProject(this)" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors">Create</button>
         </div>
     `);
     setTimeout(() => document.getElementById('modal-name')?.focus(), 100);
@@ -814,31 +867,33 @@ function showCreateKeyModal() {
         </div>
         <div class="flex justify-end gap-2 mt-5">
             <button onclick="hideModal()" class="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
-            <button onclick="createKeys()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-all">Generate</button>
+            <button onclick="createKeys(this)" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors">Generate</button>
         </div>
     `);
 }
 
 // ── Create Actions ───────────────────────────────────
 
-async function createProject() {
+async function createProject(btn) {
     const name = document.getElementById('modal-name').value.trim();
     const desc = document.getElementById('modal-desc').value.trim();
     if (!name) { toast('Project name is required', 'error'); return; }
 
+    const done = busyBtn(btn, 'Creating…');
     try {
         const project = await api('/projects', { method: 'POST', body: JSON.stringify({ name, description: desc }) });
         hideModal();
         toast('Project created', 'success');
-        renderProjects();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
-async function createKeys() {
+async function createKeys(btn) {
     const count = parseInt(document.getElementById('modal-count').value) || 1;
     const expiry = document.getElementById('modal-expiry').value || null;
     const note = document.getElementById('modal-note').value.trim();
 
+    const done = busyBtn(btn, 'Generating…');
     try {
         const result = await api(`/keys/${currentProjectId}`, {
             method: 'POST',
@@ -846,8 +901,8 @@ async function createKeys() {
         });
         hideModal();
         toast(`${result.created || 1} key(s) generated`, 'success');
-        renderKeys();
-    } catch (err) { toast(err.message, 'error'); }
+        renderPage();
+    } catch (err) { done(); toast(err.message, 'error'); }
 }
 
 // ── Utilities ────────────────────────────────────────
