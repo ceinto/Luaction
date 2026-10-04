@@ -126,7 +126,7 @@ function renderPage() {
 
 async function renderProjects() {
     const area = document.getElementById('content-area');
-    area.innerHTML = '<div class="flex items-center justify-center h-40"><div class="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div></div>';
+    // Leave the static skeleton in place until projects arrive (no spinner flash).
 
     try {
         projects = await api('/projects');
@@ -143,20 +143,16 @@ async function renderProjects() {
             return;
         }
 
-        // Fetch stats for each project
-        const statsPromises = projects.map(p => api(`/stats/${p.id}`).catch(() => null));
-        const allStats = await Promise.all(statsPromises);
-
+        // Phase 1: cards immediately (stats fill in per-card as they resolve).
         let html = '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
-        projects.forEach((p, i) => {
-            const stats = allStats[i] || {};
+        projects.forEach((p) => {
             const isKilled = !!p.kill_switch;
             const cpSteps = parseCpSteps(p);
             const cpOn = !!p.checkpoint_enabled && cpSteps.length > 0;
             const scriptBytes = (p.script_data || '').length;
             const hasScript = scriptBytes > 0;
             html += `
-            <div class="glass rounded-2xl p-5 fade-up cursor-pointer hover:border-white/10 transition-all duration-200 group" onclick="selectProject('${p.id}')" style="animation-delay: ${i * 60}ms">
+            <div class="flat rounded-2xl p-5 cursor-pointer hover:border-white/10 transition-all duration-200 group" onclick="selectProject('${p.id}')">
                 <div class="flex items-start justify-between mb-4">
                     <div>
                         <h3 class="text-sm font-semibold text-white group-hover:text-blue-400 transition-colors">${esc(p.name)}</h3>
@@ -177,15 +173,15 @@ async function renderProjects() {
                 </div>
                 <div class="grid grid-cols-3 gap-3">
                     <div class="bg-white/[0.03] rounded-xl p-3 text-center">
-                        <p class="text-lg font-bold text-white">${stats.total_keys || 0}</p>
+                        <p class="text-lg font-bold text-white" id="st-keys-${p.id}">…</p>
                         <p class="text-[10px] text-gray-500 mt-0.5">Keys</p>
                     </div>
                     <div class="bg-white/[0.03] rounded-xl p-3 text-center">
-                        <p class="text-lg font-bold text-white">${stats.success_auths || 0}</p>
+                        <p class="text-lg font-bold text-white" id="st-auths-${p.id}">…</p>
                         <p class="text-[10px] text-gray-500 mt-0.5">Auths</p>
                     </div>
                     <div class="bg-white/[0.03] rounded-xl p-3 text-center">
-                        <p class="text-lg font-bold text-white">${stats.auths_24h || 0}</p>
+                        <p class="text-lg font-bold text-white" id="st-24h-${p.id}">…</p>
                         <p class="text-[10px] text-gray-500 mt-0.5">24h</p>
                     </div>
                 </div>
@@ -208,6 +204,19 @@ async function renderProjects() {
         });
         html += '</div>';
         area.innerHTML = html;
+
+        // Phase 2: fill stats per-card as each resolves (no full re-render).
+        const pageToken = {};
+        renderProjects.pageToken = pageToken;
+        projects.forEach((p) => {
+            api(`/stats/${p.id}`).then((s) => {
+                if (!s || renderProjects.pageToken !== pageToken || currentPage !== 'projects') return;
+                const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? 0; };
+                set(`st-keys-${p.id}`, s.total_keys);
+                set(`st-auths-${p.id}`, s.success_auths);
+                set(`st-24h-${p.id}`, s.auths_24h);
+            }).catch(() => { /* card keeps placeholders */ });
+        });
 
     } catch (err) {
         area.innerHTML = `<div class="text-center py-20 text-gray-500 text-sm">Failed to load: ${esc(err.message)}</div>`;
@@ -314,8 +323,6 @@ async function showScriptModal(projectId) {
         reader.onerror = () => toast('Could not read file', 'error');
         reader.readAsText(f);
     }
-    // expose for inline use
-    window._readScriptFile = readScriptFile;
 }
 
 async function saveScript(projectId) {
@@ -587,8 +594,10 @@ async function renderKeys() {
     area.innerHTML = '<div class="flex items-center justify-center h-40"><div class="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div></div>';
 
     try {
-        const project = await api(`/projects/${currentProjectId}`);
-        const data = await api(`/keys/${currentProjectId}`);
+        const [project, data] = await Promise.all([
+            api(`/projects/${currentProjectId}`),
+            api(`/keys/${currentProjectId}`)
+        ]);
         const keys = data.keys;
         const cpSteps = parseCpSteps(project);
         const cpOn = !!project.checkpoint_enabled && cpSteps.length > 0;
@@ -617,7 +626,7 @@ async function renderKeys() {
             html += '<div class="text-center py-16 text-gray-500 text-sm">No keys yet. Generate some!</div>';
         } else {
             html += `
-            <div class="glass rounded-2xl overflow-hidden">
+            <div class="flat rounded-2xl overflow-hidden">
                 <table class="w-full text-xs">
                     <thead>
                         <tr class="border-b border-white/5">
@@ -722,7 +731,7 @@ async function renderLogs() {
         }
 
         let html = '<div class="space-y-2">';
-        logs.forEach((log, i) => {
+        logs.forEach((log) => {
             const isSuccess = log.status === 'SUCCESS';
             const statusColors = {
                 'SUCCESS': 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
@@ -736,7 +745,7 @@ async function renderLogs() {
             const color = statusColors[log.status] || 'bg-gray-500/10 text-gray-400 border-gray-500/20';
 
             html += `
-            <div class="glass rounded-xl px-4 py-3 flex items-center justify-between fade-up" style="animation-delay: ${i * 30}ms">
+            <div class="flat rounded-xl px-4 py-3 flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-lg ${isSuccess ? 'bg-emerald-500/10' : 'bg-red-500/10'} flex items-center justify-center">
                         <span class="text-sm">${isSuccess ? '✓' : '✕'}</span>
