@@ -1,16 +1,35 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+// ═══════════════════════════════════════════════════════
+//  Luaction — Postgres data layer (Supabase / Neon free tier)
+//  Same export names as the old SQLite layer; every I/O
+//  function is async. Pool stays tiny for free-tier limits.
+// ═══════════════════════════════════════════════════════
+
+const { Pool } = require('pg');
 const { randomHex, generateLicenseKey, hashScript } = require('./crypto-utils');
 
-const DB_PATH = path.join(__dirname, 'luaction.db');
-let db;
+let pool;
 
-function init() {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+async function init() {
+    if (!process.env.DATABASE_URL) {
+        throw new Error('FATAL: DATABASE_URL is not set. Add your Supabase/Neon pooled connection string as env var DATABASE_URL.');
+    }
+    pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        // Supabase/Neon require TLS; local docker instances don't.
+        // Append ?sslmode=disable to DATABASE_URL for non-TLS hosts.
+        ssl: /[?&]sslmode=disable/.test(process.env.DATABASE_URL)
+            ? false
+            : { rejectUnauthorized: false },
+        max: 5,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+    });
+    pool.on('error', (err) => console.error('[db] pool error:', err.message));
 
-    db.exec(`
+    // Smoke test the connection before serving traffic.
+    await pool.query('SELECT 1');
+
+    await pool.query(`
         CREATE TABLE IF NOT EXISTS projects (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -26,8 +45,8 @@ function init() {
             checkpoint_steps TEXT DEFAULT '[]',
             linkvertise_token TEXT DEFAULT '',
             checkpoint_cooldown_hours INTEGER DEFAULT 24,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at  TIMESTAMPTZ DEFAULT now(),
+            updated_at  TIMESTAMPTZ DEFAULT now()
         );
 
         CREATE TABLE IF NOT EXISTS keys (
@@ -39,30 +58,25 @@ function init() {
             note           TEXT DEFAULT '',
             is_active      INTEGER DEFAULT 1,
             is_blacklisted INTEGER DEFAULT 0,
-            expires_at     DATETIME DEFAULT NULL,
+            expires_at     TIMESTAMPTZ DEFAULT NULL,
             max_uses       INTEGER DEFAULT 0,
             use_count      INTEGER DEFAULT 0,
             last_ip        TEXT DEFAULT NULL,
-            last_used      DATETIME DEFAULT NULL,
+            last_used      TIMESTAMPTZ DEFAULT NULL,
             checkpoint_cleared INTEGER DEFAULT 0,
-            created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at     TIMESTAMPTZ DEFAULT now()
         );
 
         CREATE TABLE IF NOT EXISTS auth_logs (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            id          SERIAL PRIMARY KEY,
             key_id      TEXT,
             project_id  TEXT,
             hwid        TEXT,
             ip_address  TEXT,
             status      TEXT NOT NULL,
             user_agent  TEXT,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at  TIMESTAMPTZ DEFAULT now()
         );
-
-        CREATE INDEX IF NOT EXISTS idx_keys_project ON keys(project_id);
-        CREATE INDEX IF NOT EXISTS idx_keys_value ON keys(key_value);
-        CREATE INDEX IF NOT EXISTS idx_logs_project ON auth_logs(project_id);
-        CREATE INDEX IF NOT EXISTS idx_logs_created ON auth_logs(created_at);
 
         CREATE TABLE IF NOT EXISTS checkpoint_sessions (
             id          TEXT PRIMARY KEY,
@@ -73,72 +87,61 @@ function init() {
             current_step INTEGER DEFAULT 0,
             verified_steps INTEGER DEFAULT 0,
             checkpoint_token TEXT DEFAULT NULL,
-            token_expires_at DATETIME DEFAULT NULL,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            token_expires_at TIMESTAMPTZ DEFAULT NULL,
+            created_at  TIMESTAMPTZ DEFAULT now()
         );
 
         CREATE TABLE IF NOT EXISTS checkpoint_verifications (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            id          SERIAL PRIMARY KEY,
             session_id  TEXT,
             project_id  TEXT,
             step        INTEGER DEFAULT 0,
-            hash        TEXT,
+            hash        TEXT UNIQUE,
             status      TEXT NOT NULL,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at  TIMESTAMPTZ DEFAULT now()
         );
 
+        CREATE INDEX IF NOT EXISTS idx_keys_project ON keys(project_id);
+        CREATE INDEX IF NOT EXISTS idx_keys_value ON keys(key_value);
+        CREATE INDEX IF NOT EXISTS idx_logs_project ON auth_logs(project_id);
+        CREATE INDEX IF NOT EXISTS idx_logs_created ON auth_logs(created_at);
         CREATE INDEX IF NOT EXISTS idx_cp_session ON checkpoint_sessions(project_id);
         CREATE INDEX IF NOT EXISTS idx_cp_token ON checkpoint_sessions(checkpoint_token);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_verify_hash ON checkpoint_verifications(hash);
     `);
 
-    // ── Migrate existing DBs (added after initial release) ──
-    try {
-        const cols = db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name);
-        const addCol = (name, def) => {
-            if (!cols.includes(name)) db.exec(`ALTER TABLE projects ADD COLUMN ${name} ${def}`);
-        };
-        addCol('checkpoint_enabled', 'INTEGER DEFAULT 0');
-        addCol('checkpoint_steps', "TEXT DEFAULT '[]'");
-        addCol('linkvertise_token', "TEXT DEFAULT ''");
-        addCol('checkpoint_cooldown_hours', 'INTEGER DEFAULT 24');
-        const cpCols = db.prepare(`PRAGMA table_info(checkpoint_sessions)`).all().map(c => c.name);
-        if (!cpCols.includes('last_ip')) db.exec(`ALTER TABLE checkpoint_sessions ADD COLUMN last_ip TEXT DEFAULT NULL`);
-        const keyCols = db.prepare(`PRAGMA table_info(keys)`).all().map(c => c.name);
-        if (!keyCols.includes('checkpoint_cleared')) db.exec(`ALTER TABLE keys ADD COLUMN checkpoint_cleared INTEGER DEFAULT 0`);
-    } catch { /* fresh DB already has columns */ }
-
-    return db;
+    return pool;
 }
+
+function rows(res) { return res.rows; }
+function one(res) { return res.rows[0]; }
 
 // ── Projects ─────────────────────────────────────────
 
-function createProject(name, description = '') {
+async function createProject(name, description = '') {
     const id = randomHex(16);
     const apiKey = randomHex(32);
     const masterKey = randomHex(32);
-
-    const stmt = db.prepare(`
-        INSERT INTO projects (id, name, description, api_key, master_key)
-        VALUES (?, ?, ?, ?, ?)
-    `);
-    stmt.run(id, name, description, apiKey, masterKey);
+    await pool.query(
+        `INSERT INTO projects (id, name, description, api_key, master_key)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, name, description, apiKey, masterKey]
+    );
     return getProject(id);
 }
 
-function getProject(id) {
-    return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+async function getProject(id) {
+    return one(await pool.query('SELECT * FROM projects WHERE id = $1', [id]));
 }
 
-function getProjectByApiKey(apiKey) {
-    return db.prepare('SELECT * FROM projects WHERE api_key = ?').get(apiKey);
+async function getProjectByApiKey(apiKey) {
+    return one(await pool.query('SELECT * FROM projects WHERE api_key = $1', [apiKey]));
 }
 
-function listProjects() {
-    return db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
+async function listProjects() {
+    return rows(await pool.query('SELECT * FROM projects ORDER BY created_at DESC'));
 }
 
-function updateProject(id, fields) {
+async function updateProject(id, fields) {
     const allowed = ['name', 'description', 'script_data', 'version', 'version_hash', 'kill_switch', 'max_keys',
         'checkpoint_enabled', 'checkpoint_steps', 'linkvertise_token', 'checkpoint_cooldown_hours'];
     const updates = [];
@@ -146,145 +149,152 @@ function updateProject(id, fields) {
 
     for (const [key, val] of Object.entries(fields)) {
         if (allowed.includes(key)) {
-            updates.push(`${key} = ?`);
             values.push(val);
+            updates.push(`${key} = $${values.length}`);
         }
     }
 
     if (updates.length === 0) return null;
 
-    updates.push('updated_at = CURRENT_TIMESTAMP');
+    updates.push('updated_at = now()');
     values.push(id);
 
-    db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    await pool.query(`UPDATE projects SET ${updates.join(', ')} WHERE id = $${values.length}`, values);
     return getProject(id);
 }
 
-function deleteProject(id) {
-    return db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+async function deleteProject(id) {
+    await pool.query('DELETE FROM projects WHERE id = $1', [id]);
 }
 
 // ── Keys ─────────────────────────────────────────────
 
-function createKey(projectId, opts = {}) {
+async function createKey(projectId, opts = {}) {
     const id = randomHex(16);
     const keyValue = opts.key_value || generateLicenseKey();
-
-    const stmt = db.prepare(`
-        INSERT INTO keys (id, project_id, key_value, hwid, discord_id, note, expires_at, max_uses, checkpoint_cleared)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-        id, projectId, keyValue,
-        opts.hwid || null,
-        opts.discord_id || null,
-        opts.note || '',
-        opts.expires_at || null,
-        opts.max_uses || 0,
-        opts.checkpoint_cleared ? 1 : 0
+    await pool.query(
+        `INSERT INTO keys (id, project_id, key_value, hwid, discord_id, note, expires_at, max_uses, checkpoint_cleared)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [id, projectId, keyValue,
+            opts.hwid || null,
+            opts.discord_id || null,
+            opts.note || '',
+            opts.expires_at || null,
+            opts.max_uses || 0,
+            opts.checkpoint_cleared ? 1 : 0]
     );
     return getKey(id);
 }
 
-function createBulkKeys(projectId, count, opts = {}) {
+async function createBulkKeys(projectId, count, opts = {}) {
     const keys = [];
-    const insert = db.prepare(`
-        INSERT INTO keys (id, project_id, key_value, note, expires_at, max_uses)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `);
-
-    const tx = db.transaction(() => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
         for (let i = 0; i < count; i++) {
             const id = randomHex(16);
             const keyValue = generateLicenseKey();
-            insert.run(id, projectId, keyValue, opts.note || '', opts.expires_at || null, opts.max_uses || 0);
+            await client.query(
+                `INSERT INTO keys (id, project_id, key_value, note, expires_at, max_uses)
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                [id, projectId, keyValue, opts.note || '', opts.expires_at || null, opts.max_uses || 0]
+            );
             keys.push({ id, key_value: keyValue });
         }
-    });
-    tx();
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+    } finally {
+        client.release();
+    }
     return keys;
 }
 
-function getKey(id) {
-    return db.prepare('SELECT * FROM keys WHERE id = ?').get(id);
+async function getKey(id) {
+    return one(await pool.query('SELECT * FROM keys WHERE id = $1', [id]));
 }
 
-function getKeyByValue(keyValue) {
-    return db.prepare('SELECT * FROM keys WHERE key_value = ?').get(keyValue);
+async function getKeyByValue(keyValue) {
+    return one(await pool.query('SELECT * FROM keys WHERE key_value = $1', [keyValue]));
 }
 
-function listKeys(projectId, limit = 100, offset = 0) {
-    return db.prepare('SELECT * FROM keys WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?')
-        .all(projectId, limit, offset);
+async function listKeys(projectId, limit = 100, offset = 0) {
+    return rows(await pool.query(
+        'SELECT * FROM keys WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+        [projectId, limit, offset]
+    ));
 }
 
-function countKeys(projectId) {
-    return db.prepare('SELECT COUNT(*) as count FROM keys WHERE project_id = ?').get(projectId).count;
+async function countKeys(projectId) {
+    const r = one(await pool.query('SELECT COUNT(*)::int AS count FROM keys WHERE project_id = $1', [projectId]));
+    return r ? r.count : 0;
 }
 
-function updateKey(id, fields) {
+async function updateKey(id, fields) {
     const allowed = ['hwid', 'discord_id', 'note', 'is_active', 'is_blacklisted', 'expires_at', 'max_uses', 'use_count', 'last_ip', 'last_used', 'checkpoint_cleared'];
     const updates = [];
     const values = [];
 
     for (const [key, val] of Object.entries(fields)) {
         if (allowed.includes(key)) {
-            updates.push(`${key} = ?`);
             values.push(val);
+            updates.push(`${key} = $${values.length}`);
         }
     }
 
     if (updates.length === 0) return null;
     values.push(id);
 
-    db.prepare(`UPDATE keys SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    await pool.query(`UPDATE keys SET ${updates.join(', ')} WHERE id = $${values.length}`, values);
     return getKey(id);
 }
 
-function deleteKey(id) {
-    return db.prepare('DELETE FROM keys WHERE id = ?').run(id);
+async function deleteKey(id) {
+    await pool.query('DELETE FROM keys WHERE id = $1', [id]);
 }
 
-function resetHwid(id) {
-    db.prepare('UPDATE keys SET hwid = NULL WHERE id = ?').run(id);
+async function resetHwid(id) {
+    await pool.query('UPDATE keys SET hwid = NULL WHERE id = $1', [id]);
     return getKey(id);
 }
 
 // ── Auth Logs ────────────────────────────────────────
 
-function logAuth(keyId, projectId, hwid, ip, status, userAgent) {
-    db.prepare(`
-        INSERT INTO auth_logs (key_id, project_id, hwid, ip_address, status, user_agent)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `).run(keyId, projectId, hwid, ip, status, userAgent || '');
+async function logAuth(keyId, projectId, hwid, ip, status, userAgent) {
+    await pool.query(
+        `INSERT INTO auth_logs (key_id, project_id, hwid, ip_address, status, user_agent)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [keyId, projectId, hwid, ip, status, userAgent || '']
+    );
 }
 
-function getAuthLogs(projectId, limit = 50) {
-    return db.prepare(`
-        SELECT al.*, k.key_value 
-        FROM auth_logs al 
-        LEFT JOIN keys k ON al.key_id = k.id 
-        WHERE al.project_id = ? 
-        ORDER BY al.created_at DESC 
-        LIMIT ?
-    `).all(projectId, limit);
+async function getAuthLogs(projectId, limit = 50) {
+    return rows(await pool.query(
+        `SELECT al.*, k.key_value
+         FROM auth_logs al
+         LEFT JOIN keys k ON al.key_id = k.id
+         WHERE al.project_id = $1
+         ORDER BY al.created_at DESC
+         LIMIT $2`,
+        [projectId, limit]
+    ));
 }
 
 // ── Stats ────────────────────────────────────────────
 
-function getProjectStats(projectId) {
-    const totalKeys = db.prepare('SELECT COUNT(*) as c FROM keys WHERE project_id = ?').get(projectId).c;
-    const activeKeys = db.prepare('SELECT COUNT(*) as c FROM keys WHERE project_id = ? AND is_active = 1 AND is_blacklisted = 0').get(projectId).c;
-    const boundKeys = db.prepare('SELECT COUNT(*) as c FROM keys WHERE project_id = ? AND hwid IS NOT NULL').get(projectId).c;
-
-    const totalAuths = db.prepare('SELECT COUNT(*) as c FROM auth_logs WHERE project_id = ?').get(projectId).c;
-    const successAuths = db.prepare("SELECT COUNT(*) as c FROM auth_logs WHERE project_id = ? AND status = 'SUCCESS'").get(projectId).c;
-    const failedAuths = totalAuths - successAuths;
-
-    const recentAuths = db.prepare(`
-        SELECT COUNT(*) as c FROM auth_logs 
-        WHERE project_id = ? AND created_at > datetime('now', '-24 hours')
-    `).get(projectId).c;
+async function getProjectStats(projectId) {
+    const q = (text, params) => pool.query(text, params).then(r => (r.rows[0] ? Number(r.rows[0].c) : 0));
+    const totalKeys = await q('SELECT COUNT(*) AS c FROM keys WHERE project_id = $1', [projectId]);
+    const activeKeys = await q('SELECT COUNT(*) AS c FROM keys WHERE project_id = $1 AND is_active = 1 AND is_blacklisted = 0', [projectId]);
+    const boundKeys = await q('SELECT COUNT(*) AS c FROM keys WHERE project_id = $1 AND hwid IS NOT NULL', [projectId]);
+    const totalAuths = await q('SELECT COUNT(*) AS c FROM auth_logs WHERE project_id = $1', [projectId]);
+    const successAuths = await q("SELECT COUNT(*) AS c FROM auth_logs WHERE project_id = $1 AND status = 'SUCCESS'", [projectId]);
+    const recentAuths = await q(
+        `SELECT COUNT(*) AS c FROM auth_logs
+         WHERE project_id = $1 AND created_at > now() - interval '24 hours'`,
+        [projectId]
+    );
 
     return {
         total_keys: totalKeys,
@@ -292,7 +302,7 @@ function getProjectStats(projectId) {
         bound_keys: boundKeys,
         total_auths: totalAuths,
         success_auths: successAuths,
-        failed_auths: failedAuths,
+        failed_auths: totalAuths - successAuths,
         auths_24h: recentAuths
     };
 }
@@ -314,111 +324,115 @@ function isCheckpointRequired(project) {
     return parseSteps(project).length > 0;
 }
 
-function createCheckpointSession(projectId, { hwid, key_value, ip }) {
+async function createCheckpointSession(projectId, { hwid, key_value, ip }) {
     const id = randomHex(16);
-    db.prepare(`
-        INSERT INTO checkpoint_sessions (id, project_id, hwid, key_value, last_ip, current_step, verified_steps)
-        VALUES (?, ?, ?, ?, ?, 0, 0)
-    `).run(id, projectId, hwid || null, key_value || null, ip || null);
+    await pool.query(
+        `INSERT INTO checkpoint_sessions (id, project_id, hwid, key_value, last_ip, current_step, verified_steps)
+         VALUES ($1, $2, $3, $4, $5, 0, 0)`,
+        [id, projectId, hwid || null, key_value || null, ip || null]
+    );
     return getCheckpointSession(id);
 }
 
-function getCheckpointSession(id) {
-    return db.prepare('SELECT * FROM checkpoint_sessions WHERE id = ?').get(id);
+async function getCheckpointSession(id) {
+    return one(await pool.query('SELECT * FROM checkpoint_sessions WHERE id = $1', [id]));
 }
 
 // Latest still-incomplete session for this project+hwid (30 min window).
-// /checkpoint/start resumes this instead of minting duplicates, so the
-// static Linkvertise callback can only ever credit one live session.
-function findPendingSession(projectId, hwid) {
+async function findPendingSession(projectId, hwid) {
     if (!hwid) return null;
-    return db.prepare(`
-        SELECT * FROM checkpoint_sessions
-        WHERE project_id = ? AND hwid = ?
-          AND checkpoint_token IS NULL
-          AND datetime(created_at) > datetime('now', '-30 minutes')
-        ORDER BY datetime(created_at) DESC LIMIT 1
-    `).get(projectId, hwid);
+    return one(await pool.query(
+        `SELECT * FROM checkpoint_sessions
+         WHERE project_id = $1 AND hwid = $2
+           AND checkpoint_token IS NULL
+           AND created_at > now() - interval '30 minutes'
+         ORDER BY created_at DESC LIMIT 1`,
+        [projectId, hwid]
+    ));
 }
 
-// Refresh key/IP on a resumed session (user may add their key on 2nd Start).
-function touchCheckpointSession(id, { key_value, ip }) {
-    const s = getCheckpointSession(id);
+// Refresh key/IP on a resumed session.
+async function touchCheckpointSession(id, { key_value, ip }) {
+    const s = await getCheckpointSession(id);
     if (!s) return s;
-    db.prepare(`
-        UPDATE checkpoint_sessions
-        SET key_value = COALESCE(?, key_value),
-            last_ip = COALESCE(?, last_ip)
-        WHERE id = ?
-    `).run(key_value || null, ip || null, id);
+    await pool.query(
+        `UPDATE checkpoint_sessions
+         SET key_value = COALESCE($1, key_value),
+             last_ip = COALESCE($2, last_ip)
+         WHERE id = $3`,
+        [key_value || null, ip || null, id]
+    );
     return getCheckpointSession(id);
 }
 
 // Recent verification attempts for admin debugging (newest first).
-function getCheckpointAttempts(projectId, limit = 50) {
-    return db.prepare(`
-        SELECT v.*, s.hwid AS session_hwid, s.verified_steps
-        FROM checkpoint_verifications v
-        LEFT JOIN checkpoint_sessions s ON s.id = v.session_id
-        WHERE v.project_id = ?
-        ORDER BY v.created_at DESC
-        LIMIT ?
-    `).all(projectId, limit);
+async function getCheckpointAttempts(projectId, limit = 50) {
+    return rows(await pool.query(
+        `SELECT v.*, s.hwid AS session_hwid, s.verified_steps
+         FROM checkpoint_verifications v
+         LEFT JOIN checkpoint_sessions s ON s.id = v.session_id
+         WHERE v.project_id = $1
+         ORDER BY v.created_at DESC
+         LIMIT $2`,
+        [projectId, limit]
+    ));
 }
 
-function getSessionByToken(token) {
+async function getSessionByToken(token) {
     if (!token) return null;
-    return db.prepare('SELECT * FROM checkpoint_sessions WHERE checkpoint_token = ?').get(token);
+    return one(await pool.query('SELECT * FROM checkpoint_sessions WHERE checkpoint_token = $1', [token]));
 }
 
 // Valid (non-expired) checkpoint token for this project + hwid/key combo.
-// Used by /api/auth and /api/keys/claim.
-function getValidCheckpoint(projectId, { hwid, key_value, checkpoint_token }) {
+async function getValidCheckpoint(projectId, { hwid, key_value, checkpoint_token }) {
     if (checkpoint_token) {
-        const s = getSessionByToken(checkpoint_token);
+        const s = await getSessionByToken(checkpoint_token);
         if (!s || s.project_id !== projectId) return null;
         if (!s.token_expires_at || new Date(s.token_expires_at) < new Date()) return null;
         if (hwid && s.hwid && s.hwid !== hwid) return null;
         if (key_value && s.key_value && s.key_value !== key_value) return null;
         return s;
     }
-    // Fallback: any unexpired token bound to same hwid (+key if given)
     let row = null;
     if (key_value) {
-        row = db.prepare(`
-            SELECT * FROM checkpoint_sessions
-            WHERE project_id = ? AND key_value = ?
-              AND checkpoint_token IS NOT NULL
-              AND token_expires_at > datetime('now')
-            ORDER BY token_expires_at DESC LIMIT 1
-        `).get(projectId, key_value);
+        row = one(await pool.query(
+            `SELECT * FROM checkpoint_sessions
+             WHERE project_id = $1 AND key_value = $2
+               AND checkpoint_token IS NOT NULL
+               AND token_expires_at > now()
+             ORDER BY token_expires_at DESC LIMIT 1`,
+            [projectId, key_value]
+        ));
         if (row && hwid && row.hwid && row.hwid !== hwid) return null;
         if (row) return row;
     }
     if (hwid) {
-        row = db.prepare(`
-            SELECT * FROM checkpoint_sessions
-            WHERE project_id = ? AND hwid = ?
-              AND checkpoint_token IS NOT NULL
-              AND token_expires_at > datetime('now')
-            ORDER BY token_expires_at DESC LIMIT 1
-        `).get(projectId, hwid);
+        row = one(await pool.query(
+            `SELECT * FROM checkpoint_sessions
+             WHERE project_id = $1 AND hwid = $2
+               AND checkpoint_token IS NOT NULL
+               AND token_expires_at > now()
+             ORDER BY token_expires_at DESC LIMIT 1`,
+            [projectId, hwid]
+        ));
         if (row) return row;
     }
     return null;
 }
 
-function markStepVerified(sessionId, step, hash, cooldownHours) {
-    const s = getCheckpointSession(sessionId);
+async function markStepVerified(sessionId, step, hash, cooldownHours) {
+    const s = await getCheckpointSession(sessionId);
     if (!s) return null;
-    const project = getProject(s.project_id);
+    const project = await getProject(s.project_id);
     const steps = parseSteps(project);
     const cooldown = Number(project?.checkpoint_cooldown_hours ?? cooldownHours ?? 24) || 24;
 
-    db.prepare(`
-        INSERT OR IGNORE INTO checkpoint_verifications (session_id, project_id, step, hash, status)
-        VALUES (?, ?, ?, ?, 'VERIFIED')
-    `).run(sessionId, s.project_id, step, hash);
+    await pool.query(
+        `INSERT INTO checkpoint_verifications (session_id, project_id, step, hash, status)
+         VALUES ($1, $2, $3, $4, 'VERIFIED')
+         ON CONFLICT (hash) DO NOTHING`,
+        [sessionId, s.project_id, step, hash]
+    );
 
     const nextVerified = Math.max(s.verified_steps, step + 1);
     const done = nextVerified >= steps.length;
@@ -430,52 +444,56 @@ function markStepVerified(sessionId, step, hash, cooldownHours) {
         expires = new Date(Date.now() + cooldown * 3600 * 1000).toISOString();
     }
 
-    db.prepare(`
-        UPDATE checkpoint_sessions
-        SET verified_steps = ?, current_step = ?, checkpoint_token = ?, token_expires_at = ?
-        WHERE id = ?
-    `).run(nextVerified, nextVerified, token, expires, sessionId);
-    return { session: getCheckpointSession(sessionId), done };
+    await pool.query(
+        `UPDATE checkpoint_sessions
+         SET verified_steps = $1, current_step = $2, checkpoint_token = $3, token_expires_at = $4
+         WHERE id = $5`,
+        [nextVerified, nextVerified, token, expires, sessionId]
+    );
+    return { session: await getCheckpointSession(sessionId), done };
 }
 
-function logCheckpointAttempt(sessionId, projectId, step, hash, status) {
+async function logCheckpointAttempt(sessionId, projectId, step, hash, status) {
     try {
-        db.prepare(`
-            INSERT OR IGNORE INTO checkpoint_verifications (session_id, project_id, step, hash, status)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(sessionId, projectId, step, hash, status);
+        await pool.query(
+            `INSERT INTO checkpoint_verifications (session_id, project_id, step, hash, status)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (hash) DO NOTHING`,
+            [sessionId, projectId, step, hash, status]
+        );
     } catch { /* ignore */ }
 }
 
-// Attribute a verified Linkvertise hash to the latest waiting session
-// (static Target URL mode — Linkvertise can't carry the session id).
-// Returns the updated session, or null if nothing is waiting.
-function claimCheckpointByIP(projectId, step, hash, ip) {
-    // Reject hash replays (Linkvertise hashes are single-use)
-    const seen = hash ? db.prepare('SELECT id FROM checkpoint_verifications WHERE hash = ?').get(hash) : null;
+// Attribute a verified Linkvertise hash to the latest waiting session.
+async function claimCheckpointByIP(projectId, step, hash, ip) {
+    const seen = hash
+        ? one(await pool.query('SELECT id FROM checkpoint_verifications WHERE hash = $1', [hash]))
+        : null;
     if (seen) return null;
 
-    let s = db.prepare(`
-        SELECT * FROM checkpoint_sessions
-        WHERE project_id = ? AND verified_steps = ?
-          AND datetime(created_at) > datetime('now', '-30 minutes')
-          AND (last_ip = ? OR last_ip IS NULL)
-        ORDER BY datetime(created_at) DESC LIMIT 1
-    `).get(projectId, step, ip);
+    let s = one(await pool.query(
+        `SELECT * FROM checkpoint_sessions
+         WHERE project_id = $1 AND verified_steps = $2
+           AND created_at > now() - interval '30 minutes'
+           AND (last_ip = $3 OR last_ip IS NULL)
+         ORDER BY created_at DESC LIMIT 1`,
+        [projectId, step, ip]
+    ));
 
     if (!s) {
         // Localhost/dev fallback: IPs often differ (::1 vs 127.0.0.1)
-        s = db.prepare(`
-            SELECT * FROM checkpoint_sessions
-            WHERE project_id = ? AND verified_steps = ?
-              AND datetime(created_at) > datetime('now', '-5 minutes')
-            ORDER BY datetime(created_at) DESC LIMIT 1
-        `).get(projectId, step);
+        s = one(await pool.query(
+            `SELECT * FROM checkpoint_sessions
+             WHERE project_id = $1 AND verified_steps = $2
+               AND created_at > now() - interval '5 minutes'
+             ORDER BY created_at DESC LIMIT 1`,
+            [projectId, step]
+        ));
     }
     if (!s) return null;
 
-    const project = getProject(projectId);
-    const { session } = markStepVerified(s.id, step, hash, project?.checkpoint_cooldown_hours);
+    const project = await getProject(projectId);
+    const { session } = await markStepVerified(s.id, step, hash, project?.checkpoint_cooldown_hours);
     return session;
 }
 
@@ -490,4 +508,3 @@ module.exports = {
     getSessionByToken, getValidCheckpoint, markStepVerified, logCheckpointAttempt,
     claimCheckpointByIP
 };
-
