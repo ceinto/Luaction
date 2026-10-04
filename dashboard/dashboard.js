@@ -120,6 +120,15 @@ const pageCache = {};
 function cacheKey() { return currentPage + '/' + (currentProjectId || ''); }
 let renderSeq = 0;
 
+// Navigation token: captured by a renderer at entry; every paint must
+// check alive() first so a superseded (slower) navigation can never
+// flash its content over the current page — not even a spinner or error.
+function navToken() {
+    const key = cacheKey();
+    const seq = renderSeq;
+    return { alive: () => seq === renderSeq && cacheKey() === key };
+}
+
 async function renderPage() {
     const key = cacheKey();
     const mySeq = ++renderSeq;
@@ -145,10 +154,13 @@ async function renderPage() {
 
 async function renderProjects() {
     const area = document.getElementById('content-area');
+    const nav = navToken();
     // Leave the static skeleton in place until projects arrive (no spinner flash).
 
     try {
-        projects = await api('/projects');
+        const fresh = await api('/projects');
+        if (!nav.alive()) return;
+        projects = fresh;
         if (projects.length === 0) {
             area.innerHTML = `
                 <div class="flex flex-col items-center justify-center h-64 text-center fade-up">
@@ -222,6 +234,7 @@ async function renderProjects() {
             </div>`;
         });
         html += '</div>';
+        if (!nav.alive()) return;
         area.innerHTML = html;
 
         // Phase 2: fill stats per-card as each resolves (no full re-render).
@@ -238,6 +251,7 @@ async function renderProjects() {
         });
 
     } catch (err) {
+        if (!nav.alive()) return;
         area.innerHTML = `<div class="text-center py-20 text-gray-500 text-sm">Failed to load: ${esc(err.message)}</div>`;
     }
 }
@@ -629,6 +643,7 @@ async function saveCheckpoint(projectId, btn) {
 
 async function renderKeys() {
     const area = document.getElementById('content-area');
+    const nav = navToken();
     if (!currentProjectId) {
         area.innerHTML = '<div class="text-center py-20 text-gray-500 text-sm">Select a project first</div>';
         return;
@@ -644,6 +659,7 @@ async function renderKeys() {
             api(`/projects/${currentProjectId}`),
             api(`/keys/${currentProjectId}`)
         ]);
+        if (!nav.alive()) return;
         const keys = data.keys;
         const cpSteps = parseCpSteps(project);
         const cpOn = !!project.checkpoint_enabled && cpSteps.length > 0;
@@ -717,8 +733,10 @@ async function renderKeys() {
             html += '</tbody></table></div>';
         }
 
+        if (!nav.alive()) return;
         area.innerHTML = html;
     } catch (err) {
+        if (!nav.alive()) return;
         area.innerHTML = `<div class="text-center py-20 text-gray-500 text-sm">Error: ${esc(err.message)}</div>`;
     }
 }
@@ -765,6 +783,7 @@ async function deleteKey(keyId, btn) {
 
 async function renderLogs() {
     const area = document.getElementById('content-area');
+    const nav = navToken();
     if (!currentProjectId) {
         area.innerHTML = '<div class="text-center py-20 text-gray-500 text-sm">Select a project first</div>';
         return;
@@ -777,6 +796,7 @@ async function renderLogs() {
 
     try {
         const logs = await api(`/logs/${currentProjectId}`);
+        if (!nav.alive()) return;
 
         if (logs.length === 0) {
             area.innerHTML = '<div class="text-center py-16 text-gray-500 text-sm">No auth logs yet</div>';
@@ -815,8 +835,10 @@ async function renderLogs() {
             </div>`;
         });
         html += '</div>';
+        if (!nav.alive()) return;
         area.innerHTML = html;
     } catch (err) {
+        if (!nav.alive()) return;
         area.innerHTML = `<div class="text-center py-20 text-gray-500 text-sm">Error: ${esc(err.message)}</div>`;
     }
 }
