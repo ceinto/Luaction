@@ -437,7 +437,9 @@ app.get('/api/loader-stub/:projectId', requireAdmin, async (req, res) => {
     const fs = require('fs');
     try {
         const base = getBaseUrl(req);
-        const apiBase = `${base}/api`;
+        // Canonical contract: chunk arg 4 is the host base WITHOUT a
+        // trailing "/api" (the wrapper template normalizes anyway).
+        const apiBase = `${base}`;
         const keySite = `${base}/loader/checkpoint.html?project=${project.id}`;
         let script = fs.readFileSync(path.join(__dirname, '..', 'loader', 'lua_stub.lua'), 'utf8');
         script = script.split('__PROJECT_ID__').join(project.id);

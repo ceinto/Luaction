@@ -1,8 +1,12 @@
 // ═══════════════════════════════════════════════════════
 //  Luaction — Polymorphic wrapper engine (Luarmor-style)
 //  Every delivery is unique: randomized names, junk, per-
-//  delivery string encryption. Payload XOR-stream keyed by
-//  the handshake reply (never transported, never stored).
+//  delivery salt + string encryption. Payload stream keyed
+//  by split 16/16 fold of (handshake reply, salt) — neither
+//  closure alone yields the seed, nothing static crosses
+//  deliveries. Live reply always re-verified client-side;
+//  a rotating second factor (salted sentinel / branchless /
+//  blob checksum) denies single-pattern hooks.
 //  Tampered bytes decrypt to garbage -> loadstring dies.
 // ═══════════════════════════════════════════════════════
 
@@ -39,6 +43,19 @@ function lcgStream(seed, len) {
         out[i] = Math.floor(s / 65536) % 256;
     }
     return { out, state: s };
+}
+
+// Split 16/16 key fold — byte-identical twins (XA/XB) live in the chunk.
+// seed = fold(reply, salt): no single closure yields the full key, and
+// nothing static crosses deliveries. All operands non-negative, all
+// intermediate values < 2^53, so doubles are bit-exact on both sides.
+function foldSeed(r, s) {
+    r = Math.floor(Number(r)); s = Math.floor(Number(s));
+    const M32 = 4294967296;
+    const rn = ((r % M32) + M32) % M32, sn = ((s % M32) + M32) % M32;
+    const lo = ((rn % 65536) ^ (sn % 65536)) >>> 0;
+    const hi = ((Math.floor(rn / 65536) % 65536) ^ (Math.floor(sn / 65536) % 65536)) >>> 0;
+    return (hi * 65536 + lo) >>> 0;
 }
 
 function xorCrypt(buf, seed) {
@@ -92,11 +109,15 @@ function encConst(str, used) {
 // Tokens @N are replaced with per-delivery random names.
 // Arg order: (reply, key, hwid, apiBase), passed via chunk varargs:
 //   loadstring(chunk)(reply, key, hwid, apiBase)
+// CONTRACT: apiBase is the host base WITHOUT a trailing "/api"
+// (e.g. https://host). The first line normalizes anyway, so callers
+// passing ".../api" still work — the doubling class is dead.
 // NOTE: same-line statements are ';'-separated (valid 5.1 + Luau);
 // no line may END with a lone ';' (empty statement, illegal in 5.1).
 function template(n) {
     return `
 local ${n.R},${n.K},${n.H},${n.A}=...
+if ${n.A}:sub(-4)=="/api" then ${n.A}=${n.A}:sub(1,-5) end
 @JUNK1
 local function ${n.B}(s) local m={};local abc=${n.ABC};for i=1,#abc do m[abc:sub(i,i)]=i-1 end;local o={};local pad=0;if s:sub(-2)=='==' then pad=2 elseif s:sub(-1)=='=' then pad=1 end;local L=#s;for i=1,L,4 do local a=(m[s:sub(i,i)] or 0)*262144+(m[s:sub(i+1,i+1)] or 0)*4096+(m[s:sub(i+2,i+2)] or 0)*64+(m[s:sub(i+3,i+3)] or 0);o[#o+1]=math.floor(a/65536)%256;o[#o+1]=math.floor(a/256)%256;o[#o+1]=a%256 end;for i=1,pad do o[#o]=nil end;return o end
 @JUNK2
@@ -108,6 +129,8 @@ local function ${n.M}(v) local o=900000000000;return ((v%o)+o)%o end
 local function ${n.G}(g1,g2,g3) local x=${n.M}(g1);local nn=${n.M}(g2);local t=${n.M}(g3);x=${n.M}(x*191+nn*163+t*97+59);local dg=x;while dg>0 do local dt=dg%10;for kk=1,4 do if dt%2==0 then x=${n.M}(x*73+nn*29+t*11+dt+11) else x=${n.M}(x*97+nn*17+t*7+dt+37) end;if ${n.M}(x+t)%3==0 then x=${n.M}(x+nn*113+t*17) elseif ${n.M}(x+t)%3==1 then x=${n.M}(x*31+nn*17+t*19+73) else x=${n.M}(x*43+nn*29+t*13+131) end;if dt%5==0 then x=${n.M}(x*41+t*23+dt+12345) else x=${n.M}(x*53+nn*19+t*31+dt+6789) end;if ${n.M}(x+t)%7<3 then x=${n.M}(x*19+nn*23+t*29+123) else x=${n.M}(x*37+nn*13+t*41+4567) end end;dg=math.floor(dg/10) end;return math.floor(x) end
 @JUNK5
 local function ${n.F}(s) local h=2166136261;local b={s:byte(1,-1)};for i=1,#b do local v=h;local w=b[i];local r=0;local p2=1;for j=1,32 do local bv=v%2;v=math.floor(v/2);local bw=w%2;w=math.floor(w/2);if bv~=bw then r=r+p2 end;p2=p2*2 end;h=r%4294967296;h=(h*16777619)%4294967296 end;return h end
+local function ${n.XA}(a,b) a=((a%4294967296)+4294967296)%4294967296;b=((b%4294967296)+4294967296)%4294967296;local x=a%65536;local y=b%65536;local r=0;local p=1;for j=1,16 do local av=x%2;x=math.floor(x/2);local bv=y%2;y=math.floor(y/2);if av~=bv then r=r+p end;p=p*2 end;return r end
+local function ${n.XB}(a,b) a=((a%4294967296)+4294967296)%4294967296;b=((b%4294967296)+4294967296)%4294967296;local x=math.floor(a/65536)%65536;local y=math.floor(b/65536)%65536;local r=0;local p=1;for j=1,16 do local av=x%2;x=math.floor(x/2);local bv=y%2;y=math.floor(y/2);if av~=bv then r=r+p end;p=p*2 end;return r end
 @JUNK6
 local ${n.Q}=(${n.REQ} and ${n.REQ}) or (${n.HREQ} and ${n.HREQ}) or ${n.REQ2} or ${n.HREQ2}
 if not ${n.Q} then return end
@@ -121,10 +144,13 @@ local ${n.BK}=math.floor(os.time()/15)
 local ${n.E}=${n.G}(${n.S},${n.N},${n.BK})
 local ${n.LR}=tonumber(${n.GET}(${n.A}..${n.U3}..${n.E})) or nil
 if not ${n.LR} then return end
+local ${n.NV}=${n.N}+${n.S}-100000000000;if ${n.NV}<0 then ${n.NV}=-${n.NV} end
+if ${n.LR}~=${n.G}(${n.E},${n.NV},${n.BK}) and ${n.LR}~=${n.G}(${n.E},${n.NV},${n.BK}-1) and ${n.LR}~=${n.G}(${n.E},${n.NV},${n.BK}+1) then return end
 @JUNK9
-if ${n.F}(${n.VV}..${n.R})~=${n.C} then return end
+@CHECK
 @JUNK10
-local ${n.SRC}=${n.X}(${n.PAY},${n.R})
+local ${n.SD}=${n.XA}(${n.R},${n.SL})+${n.XB}(${n.R},${n.SL})*65536
+local ${n.SRC}=${n.X}(${n.PAY},${n.SD})
 local ${n.FN},${n.FE}=loadstring(${n.SRC})
 if not ${n.FN} then return end
 return ${n.FN}()`;
@@ -135,18 +161,26 @@ return ${n.FN}()`;
 function buildChunk(opts) {
     const { userScript, apiBase, key, hwid, reply, versionHash } = opts;
     if (!userScript) throw new Error('EMPTY_SCRIPT');
-    const seed = Math.floor(Number(reply));
-    if (!Number.isFinite(seed)) throw new Error('BAD_REPLY');
+    const replyNum = Math.floor(Number(reply));
+    if (!Number.isFinite(replyNum)) throw new Error('BAD_REPLY');
+
+    // Test-only overrides (deterministic verification); ignored otherwise.
+    const salt = (Number.isInteger(opts._salt) && opts._salt >= 0)
+        ? (opts._salt >>> 0) : crypto.randomInt(4294967296);
+    const shape = [0, 1, 2].includes(opts._shape) ? opts._shape : crypto.randomInt(3);
 
     const used = new Set();
     const n = {};
-    for (const t of ['R', 'K', 'H', 'A', 'B', 'D', 'X', 'M', 'G', 'F', 'Q', 'GET', 'S', 'N', 'BK', 'E', 'LR', 'C', 'SRC', 'FN', 'FE', 'ABC', 'REQ', 'HREQ', 'REQ2', 'HREQ2', 'GETM', 'U1', 'U2', 'U3', 'VV', 'PAY']) {
+    for (const t of ['R', 'K', 'H', 'A', 'B', 'D', 'X', 'M', 'G', 'F', 'Q', 'GET', 'S', 'N', 'BK', 'E', 'LR', 'NV', 'SRC', 'FN', 'FE', 'ABC', 'REQ', 'HREQ', 'REQ2', 'HREQ2', 'GETM', 'U1', 'U2', 'U3', 'PAY', 'XA', 'XB', 'SD', 'SL']) {
         n[t] = randName(used);
     }
 
-    // Payload: XOR-stream(seed=reply) -> base64
-    const cipher = xorCrypt(Buffer.from(userScript, 'utf8'), seed);
+    // Payload key: split 16/16 fold of (reply, salt). Neither closure
+    // alone yields the seed, and nothing static crosses deliveries.
+    const keySeed = foldSeed(replyNum, salt);
+    const cipher = xorCrypt(Buffer.from(userScript, 'utf8'), keySeed);
     const payB64 = cipher.toString('base64');
+    const payJSON = JSON.stringify(payB64);
 
     // Encrypted constants (fresh 1-byte key each)
     const cU1 = encConst('/api/nonce2?rngSeed=', used);
@@ -154,8 +188,10 @@ function buildChunk(opts) {
     const cU3 = encConst('/api/auth7?response=', used);
     const cGet = encConst('GET', used);
 
-    // Sentinel: FNV-1a(versionHash .. reply) — recomputed live in chunk
-    const sentinel = fnv1a(String(versionHash) + String(seed));
+    // Salted sentinel, recomputed live in shape 0.
+    const sentinel = fnv1a(String(versionHash) + '|' + salt + '|' + replyNum);
+    // Ciphertext-prefix checksum for shape 2 (same slice both sides).
+    const chk = fnv1a(payB64.slice(0, 24));
 
     let src = template(n);
 
@@ -171,11 +207,24 @@ function buildChunk(opts) {
         [n.U1, n.D + '("' + cU1.b64 + '",' + cU1.k + ')'],
         [n.U2, n.D + '("' + cU2.b64 + '",' + cU2.k + ')'],
         [n.U3, n.D + '("' + cU3.b64 + '",' + cU3.k + ')'],
-        [n.VV, JSON.stringify(String(versionHash))],
-        [n.C, String(sentinel)],
-        [n.PAY, JSON.stringify(payB64)],
+        [n.SL, String(salt)],
+        [n.PAY, payJSON],
     ].sort((a, b) => b[0].length - a[0].length);
     for (const [tok, rep] of subs) src = src.split(tok).join(rep);
+
+    // Rotating second factor (the live-reply recompute above is always
+    // on). Shape 1 is branchless here — a forged value simply decrypts
+    // to garbage. A hook script targeting one fixed pattern breaks on
+    // the others.
+    let checkStr;
+    if (shape === 0) {
+        checkStr = `if ${n.F}(${JSON.stringify(String(versionHash))}.."|"..(${salt}).."|"..${n.R})~=${sentinel} then return end`;
+    } else if (shape === 2) {
+        checkStr = `if ${n.F}((${payJSON}):sub(1,24))~=${chk} then return end`;
+    } else {
+        checkStr = '';
+    }
+    src = src.split('@CHECK').join(checkStr);
 
     // Junk injection (dead code only — never touches live locals).
     // Descending: '@JUNK1' is a prefix of '@JUNK10'.
@@ -190,4 +239,4 @@ function buildChunk(opts) {
     return src;
 }
 
-module.exports = { buildChunk, fnv1a, lcgStream, xorCrypt, encConst, B64ABC };
+module.exports = { buildChunk, fnv1a, lcgStream, xorCrypt, encConst, foldSeed, B64ABC };

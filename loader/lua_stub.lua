@@ -5,7 +5,7 @@
 -- ═══════════════════════════════════════════════════
 
 local PROJECT_ID  = "__PROJECT_ID__"
-local API_URL     = "__API_URL__" -- e.g. https://your-api.onrender.com/api (no trailing slash)
+local API_URL     = "__API_URL__" -- host base, NO trailing "/api" (chunk normalizes legacy ".../api" anyway)
 local KEY_SITE_URL = API_URL:gsub("/api$", "") .. "/loader/checkpoint.html?project=" .. PROJECT_ID
 
 if getgenv().__LUACTION_LOADED then return end
@@ -258,7 +258,7 @@ submitBtn.MouseButton1Click:Connect(function()
     if not fn then setStatus("Corrupt payload.", Color3.fromRGB(239, 68, 68)) return end
 
     frame.Visible = false
-    local ok, rerr = pcall(fn, reply, key, hwid, API_URL)
+    local ok, rerr = pcall(fn, reply, key, hwid, API_URL:gsub("/api$", ""))
     if not ok then
         frame.Visible = true
         setStatus("Script error.", Color3.fromRGB(239, 68, 68))
